@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+studio.log
+projects/
+settings.json
+build-cache/
+portable/
+runtime/
+test-results/
+playwright-report/
+tools/

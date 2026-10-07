@@ -1,0 +1,8 @@
+{
+  "name": "ScriptCraft Studio",
+  "description": "Interactive code & script studio for writing, running, and generating software with Gemini AI co-pilot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
