@@ -16,7 +16,9 @@ import {
   TriangleAlert,
   Wrench,
   Columns2,
+  Eye,
 } from 'lucide-react';
+import { MarkdownPreview } from './MarkdownPreview.tsx';
 import { FileItem, FileLanguage } from '../types.ts';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
@@ -117,6 +119,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     return 13;
   });
   const [showAIMenu, setShowAIMenu] = useState(false);
+  const [mdPreview, setMdPreview] = useState(true);
+  const isMarkdown = activeFile.language === 'markdown' || /\.(md|markdown)$/i.test(activeFile.name);
+  const showMdPreview = isMarkdown && mdPreview;
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [tools, setTools] = useState(getCodeToolsState);
   const activeFileNameRef = useRef(activeFile.name);
@@ -411,6 +416,17 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             </button>
           )}
 
+          {isMarkdown && (
+            <button
+              onClick={() => setMdPreview((v) => !v)}
+              data-md-preview-toggle
+              className={`p-1 rounded hover:bg-slate-800 ${showMdPreview ? 'text-indigo-400' : 'text-slate-400 hover:text-slate-200'}`}
+              title={showMdPreview ? t('md.hidePreview') : t('md.showPreview')}
+            >
+              <Eye className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           <button
             onClick={handleFormatCode}
             className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200"
@@ -455,8 +471,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         </div>
       </div>
 
-      {/* Monaco editor */}
-      <div className="flex-1 min-h-0" data-active-file={activeFile.name} data-active-file-id={activeFile.id}>
+      {/* Monaco editor (+ live Markdown preview on the right for .md files) */}
+      <div className="flex-1 min-h-0 flex">
+      <div className={`min-h-0 ${showMdPreview ? 'w-1/2 border-r border-slate-800' : 'flex-1'}`} data-active-file={activeFile.name} data-active-file-id={activeFile.id}>
         <Editor
           path={activeFile.id}
           language={MONACO_LANGUAGE[activeFile.language] || 'plaintext'}
@@ -491,6 +508,12 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             glyphMargin: true,
           }}
         />
+      </div>
+        {showMdPreview && (
+          <div className="w-1/2 min-h-0 overflow-auto bg-canvas">
+            <MarkdownPreview content={activeFile.content} projectId={projectId || undefined} />
+          </div>
+        )}
       </div>
 
       {/* Footer Info */}

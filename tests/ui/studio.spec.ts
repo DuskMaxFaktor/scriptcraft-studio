@@ -176,6 +176,21 @@ test('quick open (Ctrl+P) jumps to a file', async ({ page, request }) => {
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('REPORT = True');
 });
 
+test('markdown preview renders the .md file and toggles off', async ({ page, request }) => {
+  await openStudio(page, request, 'Readme', [
+    { name: 'README.md', language: 'markdown', isEntry: true, content: '# Заголовок\n\n- пункт один\n- пункт два\n\n**жирный** текст\n\n```js\nconst a = 1;\n```\n' },
+  ]);
+  const preview = page.locator('[data-md-preview]');
+  await expect(preview).toBeVisible(); // on by default for .md
+  await expect(preview.locator('h1')).toHaveText('Заголовок');
+  await expect(preview.locator('li')).toHaveCount(2);
+  await expect(preview.locator('strong')).toHaveText('жирный');
+  await expect(preview.locator('pre code')).toContainText('const a = 1;');
+  // The eye button hides the preview
+  await page.locator('[data-md-preview-toggle]').click();
+  await expect(preview).toBeHidden();
+});
+
 test('web preview shows the project page on its own port', async ({ page, request }) => {
   await openStudio(page, request, 'Сайт', [
     { name: 'index.html', content: '<!DOCTYPE html><html><head></head><body><h1 id="t">Мой сайт</h1></body></html>', isEntry: true },

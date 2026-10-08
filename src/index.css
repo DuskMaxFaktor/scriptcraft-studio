@@ -338,6 +338,31 @@ body.resizing-y iframe {
 .chat-md th, .chat-md td { border: 1px solid var(--color-slate-700); padding: 0.3em 0.6em; text-align: left; }
 .chat-md th { background: var(--c-raised); color: var(--c-fg); font-weight: 600; }
 
+/* ===== Markdown file preview (document feel: a bit larger, padded, with code blocks) ===== */
+.md-preview {
+  font-size: 13.5px;
+  padding: 20px 24px;
+  max-width: 900px;
+  color: var(--color-slate-300);
+}
+.md-preview img { max-width: 100%; height: auto; border-radius: 6px; margin: 0.5em 0; }
+.md-preview pre {
+  margin: 0.6em 0;
+  padding: 0.75em 0.9em;
+  background: var(--c-deep);
+  border: 1px solid var(--color-slate-700);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.md-preview pre code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  color: var(--color-slate-200);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
 /* ===== Debugger: breakpoints and the current line in the editor ===== */
 .monaco-editor .sc-breakpoint {
   background: radial-gradient(circle at center, #e5484d 0 5px, transparent 5.5px);
