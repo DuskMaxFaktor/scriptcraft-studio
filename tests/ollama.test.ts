@@ -110,3 +110,16 @@ test('JSON answers: a schema keeps small models from rambling forever, and the l
   assert.equal(lastBody.format, 'json');
   assert.equal(lastBody.options.num_predict, 8192);
 });
+
+test('ollama: an attached image rides on the message (base64, for vision models)', async () => {
+  const gemini = await import(pathToFileURL(path.join(studioRoot, 'api', 'gemini.ts')).href);
+  await gemini.handleMultiTurnChat({
+    model: 'ollama:qwen2.5vl',
+    systemInstruction: 'Sys',
+    lang: 'en',
+    messages: [{ role: 'user', text: 'what is this?', images: [{ mime: 'image/png', data: 'QUJD' }] }],
+  });
+  const last = lastMessages.at(-1) as { content: string; images?: string[] };
+  assert.deepEqual(last.images, ['QUJD']); // base64 only, no mime / data: prefix
+  assert.equal(last.content, 'what is this?');
+});

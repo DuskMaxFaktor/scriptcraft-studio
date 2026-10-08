@@ -6,6 +6,8 @@ import { readSettings } from './settings.ts';
 export interface LlmMessage {
   role: 'user' | 'model';
   text: string;
+  /** Base64 images (no data: prefix) for vision models; used by Ollama's /api/chat */
+  images?: string[];
 }
 
 export interface ExternalModel {
@@ -89,7 +91,8 @@ const isOutOfMemory = (msg: string) => /out.of.memory|failed to allocate|insuffi
 function ollamaMessages(system: string, messages: LlmMessage[]) {
   return [
     ...(system ? [{ role: 'system', content: system }] : []),
-    ...messages.map((m) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text })),
+    // Ollama's native /api/chat takes images as base64 on the message; vision models (e.g. qwen2.5vl) use them, others ignore them
+    ...messages.map((m) => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text, ...(m.images?.length ? { images: m.images } : {}) })),
   ];
 }
 

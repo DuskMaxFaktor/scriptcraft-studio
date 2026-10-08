@@ -50,6 +50,8 @@ export interface ChatMessage {
     language: string;
     code: string;
   };
+  /** Images attached by the user (base64, no data: prefix) — sent to vision models */
+  images?: { mime: string; data: string }[];
 }
 
 export interface ModelOption {

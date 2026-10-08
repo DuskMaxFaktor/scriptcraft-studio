@@ -5,7 +5,7 @@ import { spawnSync } from 'child_process';
 
 const hasPython = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['--version'], { shell: true }).status === 0;
 
-type FileSpec = { name: string; content: string; isEntry?: boolean };
+type FileSpec = { name: string; content: string; isEntry?: boolean; language?: string };
 
 /** Create a project and open the studio on it; fails the test on any error in the browser console. */
 async function openStudio(page: Page, request: APIRequestContext, name: string, files: FileSpec[]) {
@@ -375,6 +375,38 @@ test('chat answer with code: "Create files" makes every named file, the agent hi
   await expect
     .poll(async () => ((await (await request.get(`/api/projects/${project.id}`)).json()).files as { name: string }[]).map((f) => f.name).sort())
     .toEqual(['app.py', 'main.py', 'utils.py']);
+});
+
+test('chat: attach an image, it previews, is sent to the model and shows in the message', async ({ page, request }) => {
+  const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  let sentBody: any = null;
+  await page.route('**/api/chat/stream', async (route) => {
+    sentBody = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+      body: 'data: {"t":"Вижу картинку"}\n\ndata: {"done":true,"model":"test"}\n\n',
+    });
+  });
+  await page.addInitScript(() => localStorage.setItem('scriptcraft-agent-mode', 'off'));
+  await openStudio(page, request, 'Vision', [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }]);
+
+  await page.locator('input[data-chat-file]').setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: Buffer.from(PNG_B64, 'base64') });
+  await expect(page.locator('[data-chat-images] img')).toHaveCount(1);
+
+  const chat = page.getByPlaceholder(/Попросите ИИ|Опишите задачу/);
+  await chat.fill('что на картинке?');
+  await chat.press('Enter');
+
+  // The streamed answer appears and the user bubble shows the image
+  await expect(page.locator('.chat-md').getByText('Вижу картинку')).toBeVisible();
+  await expect(page.locator('[data-message-images] img')).toHaveCount(1);
+  // The image reached the server on the last message, as base64 with its MIME type
+  const last = sentBody.messages.at(-1);
+  expect(last.images[0]).toEqual({ mime: 'image/png', data: PNG_B64 });
+  expect(last.text).toContain('что на картинке?');
+  // After sending, the attachment strip is cleared
+  await expect(page.locator('[data-chat-images]')).toHaveCount(0);
 });
 
 test('build .exe from the Export menu', async ({ page, request }) => {

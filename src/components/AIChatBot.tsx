@@ -18,7 +18,9 @@ import {
   FilePlus,
   RefreshCw,
   Square,
-  Workflow
+  Workflow,
+  ImagePlus,
+  X as XIcon
 } from 'lucide-react';
 import { ChatMessage, AIRole, FileItem } from '../types.ts';
 import { useModels } from '../utils/models.ts';
@@ -144,6 +146,8 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
   const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage()]);
 
   const [input, setInput] = useState('');
+  const [images, setImages] = useState<{ mime: string; data: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
   // Pending "may I change files / run code?" question of the agent
@@ -374,10 +378,45 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     abortRef.current = null;
   };
 
+  // ---------- image attachments (vision models) ----------
+  const MAX_IMAGES = 6;
+  const IMG_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+  const IMG_MAX_BYTES = 8 * 1024 * 1024;
+  const addImageFiles = async (incoming: (File | null)[]) => {
+    const files = incoming.filter((f): f is File => !!f && IMG_TYPES.includes(f.type) && f.size <= IMG_MAX_BYTES);
+    if (!files.length) return;
+    const read = await Promise.all(
+      files.map(
+        (f) =>
+          new Promise<{ mime: string; data: string }>((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve({ mime: f.type, data: String(r.result).split(',')[1] || '' });
+            r.onerror = () => reject(r.error);
+            r.readAsDataURL(f);
+          })
+      )
+    );
+    setImages((prev) => [...prev, ...read.filter((x) => x.data)].slice(0, MAX_IMAGES));
+  };
+  const onPasteInput = (e: React.ClipboardEvent) => {
+    const imgs = Array.from(e.clipboardData.items).filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile());
+    if (imgs.length) {
+      e.preventDefault();
+      void addImageFiles(imgs);
+    }
+  };
+  const onDropInput = (e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.files).some((f) => f.type.startsWith('image/'))) {
+      e.preventDefault();
+      void addImageFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
   // ---------- normal chat (streamed) ----------
   const handleSendMessage = async (customPrompt?: string, displayText?: string) => {
     const textToSend = customPrompt || input.trim();
-    if (!textToSend || isLoading) return;
+    const outgoingImages = customPrompt ? [] : images;
+    if ((!textToSend && outgoingImages.length === 0) || isLoading) return;
 
     if (agentMode && !customPrompt) return handleRunAgent(textToSend);
 
@@ -400,12 +439,14 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
       text: displayText || textToSend,
       timestamp: nowTime(),
       attachedCodeSnippet: snippetMeta,
+      images: outgoingImages.length ? outgoingImages : undefined,
     };
 
     const newMessagesList = [...messages, userMessage];
     const aiId = `ai-${Date.now()}`;
     setMessages([...newMessagesList, { id: aiId, role: 'model', text: '', timestamp: nowTime(), modelUsed: selectedModel.id, roleUsed: selectedRole.id }]);
     setInput('');
+    setImages([]);
     setIsLoading(true);
 
     const controller = new AbortController();
@@ -416,9 +457,12 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     try {
       // Build conversation payload; the last prompt carries the full attached context
       const payloadMessages = newMessagesList
-        .filter((m) => m.id !== 'msg-welcome' && m.id !== 'msg-welcome-new' && m.text)
-        .map((m) => ({ role: m.role, text: m.text }));
-      payloadMessages[payloadMessages.length - 1].text = fullPromptText;
+        .filter((m) => m.id !== 'msg-welcome' && m.id !== 'msg-welcome-new' && (m.text || m.images?.length))
+        .map((m) => ({ role: m.role, text: m.text }) as { role: string; text: string; images?: { mime: string; data: string }[] });
+      const lastPayload = payloadMessages[payloadMessages.length - 1];
+      lastPayload.text = fullPromptText;
+      // Images go only on the latest message (keeps the request small); vision models read them
+      if (outgoingImages.length) lastPayload.images = outgoingImages;
 
       const res = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -773,38 +817,81 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
           </div>
         )}
 
-        <div className="flex items-end gap-1.5 bg-panel border border-slate-700/80 rounded-lg p-1.5 focus-within:border-indigo-500 transition-colors">
-          <textarea
-            rows={2}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSendMessage();
-              }
-            }}
-            placeholder={agentMode ? t('agent.placeholder') : t('chat.placeholder')}
-            className="w-full bg-transparent text-xs text-fg placeholder-slate-400 focus:outline-none resize-none p-1"
-          />
-          {isLoading ? (
-            <button
-              onClick={handleStop}
-              className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-500 text-white shrink-0 shadow transition-colors"
-              title={t('chat.stop')}
-            >
-              <Square className="w-3.5 h-3.5 fill-current" />
-            </button>
-          ) : (
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={!input.trim()}
-              className="p-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white shrink-0 shadow transition-colors"
-              title={t('chat.send')}
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
+        <div
+          onDrop={onDropInput}
+          onDragOver={(e) => e.preventDefault()}
+          className="bg-panel border border-slate-700/80 rounded-lg p-1.5 focus-within:border-indigo-500 transition-colors"
+        >
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-1.5" data-chat-images>
+              {images.map((im, i) => (
+                <div key={i} className="relative">
+                  <img src={`data:${im.mime};base64,${im.data}`} alt="" className="w-12 h-12 object-cover rounded border border-slate-700" />
+                  <button
+                    onClick={() => setImages((p) => p.filter((_, j) => j !== i))}
+                    className="absolute -top-1.5 -right-1.5 bg-slate-800 border border-slate-600 text-slate-300 hover:text-white rounded-full p-0.5 shadow"
+                    title={t('chat.removeImage')}
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
+          <div className="flex items-end gap-1.5">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              data-attach-image
+              className="p-1.5 rounded-md text-slate-400 hover:text-indigo-300 hover:bg-slate-800 shrink-0 transition-colors"
+              title={t('chat.attachImage')}
+            >
+              <ImagePlus className="w-3.5 h-3.5" />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              data-chat-file
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                void addImageFiles(Array.from(e.target.files || []));
+                e.target.value = '';
+              }}
+            />
+            <textarea
+              rows={2}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onPaste={onPasteInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              placeholder={agentMode ? t('agent.placeholder') : t('chat.placeholder')}
+              className="w-full bg-transparent text-xs text-fg placeholder-slate-400 focus:outline-none resize-none p-1"
+            />
+            {isLoading ? (
+              <button
+                onClick={handleStop}
+                className="p-1.5 rounded-md bg-rose-600 hover:bg-rose-500 text-white shrink-0 shadow transition-colors"
+                title={t('chat.stop')}
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={() => handleSendMessage()}
+                disabled={!input.trim() && images.length === 0}
+                className="p-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white shrink-0 shadow transition-colors"
+                title={t('chat.send')}
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -883,7 +970,16 @@ const ChatMessageBubble: React.FC<BubbleProps> = React.memo(({
         }`}
       >
         {isUser ? (
-          <div className="whitespace-pre-wrap leading-relaxed text-xs break-words">{message.text}</div>
+          <div>
+            {message.images && message.images.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-1.5" data-message-images>
+                {message.images.map((im, i) => (
+                  <img key={i} src={`data:${im.mime};base64,${im.data}`} alt="" className="max-w-[160px] max-h-[160px] rounded border border-indigo-400/40" />
+                ))}
+              </div>
+            )}
+            {message.text && <div className="whitespace-pre-wrap leading-relaxed text-xs break-words">{message.text}</div>}
+          </div>
         ) : (
           <div className="chat-md">
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>

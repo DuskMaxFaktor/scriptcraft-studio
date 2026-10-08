@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
-import { isExternalModel, externalChat, externalChatStream, externalJson, withReplyLanguage, toJsonSchema } from './llm.ts';
+import { isExternalModel, externalChat, externalChatStream, externalJson, withReplyLanguage, toJsonSchema, type LlmMessage } from './llm.ts';
 
 // Lazily initialize the GoogleGenAI instance server-side so a missing key
 // produces a clear error instead of a startup warning / opaque API failure.
@@ -36,9 +36,16 @@ function getAI(): GoogleGenAI {
   return aiInstance;
 }
 
+/** An image attached to a chat message: base64 data (no data: prefix) and its MIME type. */
+export interface ChatImage {
+  mime: string;
+  data: string;
+}
+
 export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
+  images?: ChatImage[];
 }
 
 export interface ChatOptions {
@@ -46,6 +53,46 @@ export interface ChatOptions {
   systemInstruction?: string;
   messages: ChatMessage[];
   temperature?: number;
+}
+
+const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/heic', 'image/heif']);
+const MAX_IMAGES_PER_MSG = 6;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // ~8 MB per image
+
+/** Keep only well-formed images of an allowed type within the size limit. */
+function cleanImages(images: unknown): ChatImage[] | undefined {
+  if (!Array.isArray(images)) return undefined;
+  const out: ChatImage[] = [];
+  for (const im of images) {
+    const mime = String((im as any)?.mime || '').toLowerCase();
+    const data = String((im as any)?.data || '');
+    if (!IMAGE_MIME.has(mime) || !/^[A-Za-z0-9+/=]+$/.test(data)) continue;
+    if (data.length * 0.75 > MAX_IMAGE_BYTES) continue;
+    out.push({ mime, data });
+    if (out.length >= MAX_IMAGES_PER_MSG) break;
+  }
+  return out.length ? out : undefined;
+}
+
+/** Normalize every message's images (drop bad ones). Returns a new array. */
+function withCleanImages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    const images = cleanImages((m as any).images);
+    return images ? { role: m.role, text: m.text, images } : { role: m.role, text: m.text };
+  });
+}
+
+/** Gemini parts for one message: the text plus any inline images. */
+function toGeminiParts(m: ChatMessage): any[] {
+  const parts: any[] = [];
+  if (m.text) parts.push({ text: m.text });
+  for (const im of m.images || []) parts.push({ inlineData: { mimeType: im.mime, data: im.data } });
+  return parts.length ? parts : [{ text: '' }];
+}
+
+/** Convert chat messages (with {mime,data} images) to LlmMessages (images as plain base64 for Ollama). */
+function toLlmMessages(messages: ChatMessage[]): LlmMessage[] {
+  return messages.map((m) => (m.images?.length ? { role: m.role, text: m.text, images: m.images.map((i) => i.data) } : { role: m.role, text: m.text }));
 }
 
 // Allowed models based on task requirements
@@ -209,14 +256,14 @@ export async function handleMultiTurnChat(options: ChatOptions & { lang?: UiLang
     options.systemInstruction ||
     'You are an expert AI Software Engineer and Script Developer in ScriptCraft Studio. Provide precise, production-grade code, clear explanations, and working examples. Format code blocks with appropriate language tags.';
 
-  const { messages } = options;
-  if (!messages || messages.length === 0) {
+  if (!options.messages || options.messages.length === 0) {
     throw new Error('Messages list cannot be empty');
   }
+  const messages = withCleanImages(options.messages);
 
   // A model chosen by the user (Ollama / own server): no silent switching to another provider
   if (isExternalModel(preferredModel)) {
-    const l = withReplyLanguage(systemInstruction, messages, options.lang === 'en' ? 'en' : 'ru');
+    const l = withReplyLanguage(systemInstruction, toLlmMessages(messages), options.lang === 'en' ? 'en' : 'ru');
     return externalChat(preferredModel, l.system, l.messages, options.temperature ?? 0.7);
   }
 
@@ -229,10 +276,10 @@ export async function handleMultiTurnChat(options: ChatOptions & { lang?: UiLang
       },
       history: messages.slice(0, -1).map((msg) => ({
         role: msg.role,
-        parts: [{ text: msg.text }],
+        parts: toGeminiParts(msg),
       })),
     });
-    const response = await chat.sendMessage({ message: messages[messages.length - 1].text, config: { abortSignal: signal } });
+    const response = await chat.sendMessage({ message: toGeminiParts(messages[messages.length - 1]), config: { abortSignal: signal } });
     return response.text || '';
   }, GEMINI_TIMEOUTS.chat);
 }
@@ -352,7 +399,7 @@ export async function handleAgentStep(params: {
     const l = withReplyLanguage(
       agentSystem +
         '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "done": boolean, "planStep": number or null}.',
-      messages,
+      toLlmMessages(messages),
       lang,
       true
     );
@@ -454,7 +501,7 @@ export async function handleAgentPlan(params: { messages: ChatMessage[]; model?:
   if (isExternalModel(preferred)) {
     const l = withReplyLanguage(
       system + '\nAnswer ONLY with one JSON object of the form {"summary": string, "steps": [{"title": string, "files": [string]}], "questions": [string]}.',
-      messages,
+      toLlmMessages(messages),
       lang,
       true
     );
@@ -488,14 +535,14 @@ export async function streamMultiTurnChat(
 ): Promise<{ model: string }> {
   const preferred = options.model || 'gemini-3.5-flash';
   const lang: UiLang = options.lang === 'en' ? 'en' : 'ru';
-  const { messages } = options;
-  if (!messages || messages.length === 0) throw new Error('Messages list cannot be empty');
+  if (!options.messages || options.messages.length === 0) throw new Error('Messages list cannot be empty');
+  const messages = withCleanImages(options.messages);
   const systemInstruction =
     options.systemInstruction ||
     'You are an expert AI Software Engineer and Script Developer in ScriptCraft Studio. Provide precise, production-grade code, clear explanations, and working examples. Format code blocks with appropriate language tags.';
 
   if (isExternalModel(preferred)) {
-    const l = withReplyLanguage(systemInstruction, messages, options.lang === 'en' ? 'en' : 'ru');
+    const l = withReplyLanguage(systemInstruction, toLlmMessages(messages), options.lang === 'en' ? 'en' : 'ru');
     await externalChatStream(preferred, l.system, l.messages, onChunk, isAborted, options.temperature ?? 0.7);
     return { model: preferred };
   }
@@ -517,10 +564,10 @@ export async function streamMultiTurnChat(
       const chat = getAI().chats.create({
         model,
         config: { systemInstruction, temperature: options.temperature ?? 0.7 },
-        history: messages.slice(0, -1).map((msg) => ({ role: msg.role, parts: [{ text: msg.text }] })),
+        history: messages.slice(0, -1).map((msg) => ({ role: msg.role, parts: toGeminiParts(msg) })),
       });
       const stream = await withTimeout(
-        chat.sendMessageStream({ message: messages[messages.length - 1].text, config: { abortSignal: ctrl.signal } }),
+        chat.sendMessageStream({ message: toGeminiParts(messages[messages.length - 1]), config: { abortSignal: ctrl.signal } }),
         GEMINI_TIMEOUTS.streamFirst,
         ctrl
       );
