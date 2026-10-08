@@ -435,6 +435,34 @@ test('debugger: a conditional breakpoint stops on the right iteration and watche
   await expect(page.locator('[data-debug-start]')).toBeEnabled({ timeout: 20_000 });
 });
 
+test('notebook: markdown renders and a code cell runs against a stateful kernel', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const ipynb = JSON.stringify({
+    cells: [
+      { cell_type: 'markdown', metadata: {}, source: ['# Мой ноутбук'] },
+      { cell_type: 'code', metadata: {}, execution_count: null, source: ['a = 20'], outputs: [] },
+      { cell_type: 'code', metadata: {}, execution_count: null, source: ['a + 22'], outputs: [] },
+    ],
+    metadata: {},
+    nbformat: 4,
+    nbformat_minor: 5,
+  });
+  const project = (await (await request.post('/api/projects', { data: { name: 'Ноутбук', files: [{ name: 'notes.ipynb', language: 'text', content: ipynb, isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => localStorage.setItem('scriptcraft-last-project', id), project.id);
+  await page.goto('/');
+
+  // The notebook view opens (not the plain code editor), markdown renders
+  await expect(page.locator('[data-notebook]')).toBeVisible();
+  await expect(page.locator('[data-md-cell] h1')).toHaveText('Мой ноутбук');
+
+  // Run all: the kernel keeps state, so the 2nd code cell sees `a` from the 1st and prints 42
+  await page.getByRole('button', { name: 'Запустить всё', exact: true }).click();
+  await expect(page.locator('[data-cell-output]').last()).toContainText('42', { timeout: 30_000 });
+  await expect(page.locator('[data-kernel-status="ready"]')).toBeVisible();
+  // Leave the notebook so its kernel shuts down (unmount → DELETE kernel) before afterEach removes the project
+  await page.goto('about:blank');
+});
+
 test('build .exe from the Export menu', async ({ page, request }) => {
   test.setTimeout(240_000);
   const project = await openStudio(page, request, 'Сборка', [{ name: 'hello.py', content: 'print("hello from exe")', isEntry: true }]);

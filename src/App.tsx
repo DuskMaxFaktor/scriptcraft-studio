@@ -1158,6 +1158,15 @@ export default function App() {
             <Suspense fallback={<div className="flex-1 bg-deep" />}>
               <AssetViewer projectId={currentProject.id} asset={assets.find((x) => x.name === viewAsset)!} onClose={() => setViewAsset(null)} />
             </Suspense>
+          ) : activeFile && activeFile.name.toLowerCase().endsWith('.ipynb') ? (
+            <Suspense fallback={<div className="flex-1 bg-deep" />}>
+              <NotebookView
+                key={activeFile.id}
+                content={activeFile.content}
+                projectId={currentProject?.id || null}
+                onChange={(c) => handleUpdateFileContent(activeFile.id, c)}
+              />
+            </Suspense>
           ) : activeFile ? (
             <div className="flex-1 flex min-h-0 min-w-0">
             <Suspense fallback={<div className="flex-1 bg-deep" />}>
@@ -1355,6 +1364,7 @@ const AiSettingsModal = lazyNamed(() => import('./components/AiSettingsModal.tsx
 const BuildExeModal = lazyNamed(() => import('./components/BuildExeModal.tsx'), 'BuildExeModal');
 const RunConfigModal = lazyNamed(() => import('./components/RunConfigModal.tsx'), 'RunConfigModal');
 const SecondaryEditor = lazyNamed(() => import('./components/SecondaryEditor.tsx'), 'SecondaryEditor');
+const NotebookView = lazyNamed(() => import('./components/NotebookView.tsx'), 'NotebookView');
 const AssetViewer = lazyNamed(() => import('./components/AssetViewer.tsx'), 'AssetViewer');
 
 const LAST_PROJECT_KEY = 'scriptcraft-last-project';

@@ -17,7 +17,7 @@ const isWin = process.platform === 'win32';
 
 // On Windows the script runs under cmd.exe (shell: true), so proc.kill() would only
 // terminate the shell and leave the actual interpreter running. Kill the whole tree.
-function killProcessTree(proc: ChildProcess) {
+export function killProcessTree(proc: ChildProcess) {
   if (isWin && proc.pid) {
     spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
   } else {
