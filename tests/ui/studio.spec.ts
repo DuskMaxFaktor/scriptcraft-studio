@@ -581,6 +581,54 @@ test('other files: an image and a SQLite database made by a program open in the 
   await expect(page.locator('.monaco-editor').first()).toBeVisible();
 });
 
+test('agent: proposes a package install, the user approves, pip runs into the project', async ({ page, request }) => {
+  const project = (await (await request.post('/api/projects', { data: { name: 'Install', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => {
+    localStorage.setItem('scriptcraft-last-project', id);
+    localStorage.setItem('scriptcraft-agent-mode', 'on');
+    localStorage.setItem('scriptcraft-agent-confirm', 'on'); // approvals on, so the install card shows
+    localStorage.setItem('scriptcraft-agent-plan', 'off');
+  }, project.id);
+
+  let steps = 0;
+  await page.route('**/api/agent/step', async (route) => {
+    steps++;
+    const step =
+      steps === 1
+        ? { message: 'Нужен requests', files: [], run: null, install: { python: ['requests'], node: [] }, done: false, planStep: null }
+        : { message: 'Готово', files: [], run: null, install: null, done: true, planStep: null };
+    await route.fulfill({ json: { step, model: 'test', notice: null } });
+  });
+  // The install endpoint and its run-stream are faked (no real pip): capture that it was asked for
+  let installBody: any = null;
+  await page.route('**/packages/install', async (route) => {
+    installBody = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({ json: { runId: 'fake-run' } });
+  });
+  await page.route('**/api/run/fake-run/events', async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+      body: 'data: {"type":"output","data":"Successfully installed requests-2.0"}\n\ndata: {"type":"exit","code":0}\n\n',
+    });
+  });
+
+  await page.goto('/');
+  await page.getByPlaceholder(/Опишите задачу/).fill('Скачай страницу через requests');
+  await page.getByPlaceholder(/Опишите задачу/).press('Enter');
+
+  // The install approval card appears and lists the package
+  const card = page.locator('[data-agent-approval="install"]');
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card).toContainText('requests');
+  await card.getByRole('button', { name: 'Установить', exact: true }).click();
+
+  // The install was requested as pip + the package, and the result shows in the chat
+  await expect.poll(() => installBody).toEqual({ manager: 'pip', packages: ['requests'] });
+  await expect(page.getByText(/Установка пакетов/).last()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/Агент завершил|Готово|завершил/).last()).toBeVisible({ timeout: 20_000 });
+});
+
 test('agent plan: propose, revise, run; the checklist is ticked off as the agent works', async ({ page, request }) => {
   const project = (await (await request.post('/api/projects', { data: { name: 'План', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
   await page.addInitScript((id) => {

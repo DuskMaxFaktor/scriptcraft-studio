@@ -33,6 +33,7 @@ import {
   buildProjectContext,
   filesFromItems,
   formatRunReport,
+  formatInstall,
   type AgentFile,
   type AgentApproval,
   type AgentApprovalRequest,
@@ -355,6 +356,9 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
           setAgentStatus(t('agent.working'));
         } else if (e.kind === 'run') {
           addModelMessage(formatRunReport(e.path, e.report), { roleUsed: 'agent' });
+          setAgentStatus(t('agent.thinking'));
+        } else if (e.kind === 'install') {
+          addModelMessage(formatInstall(e), { roleUsed: 'agent' });
           setAgentStatus(t('agent.thinking'));
         } else {
           if (e.reason === 'done') markPlan(null, true);

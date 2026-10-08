@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
-import { Check, X, CheckCheck, GitCompare, Play, FilePlus, FileEdit } from 'lucide-react';
+import { Check, X, CheckCheck, GitCompare, Play, FilePlus, FileEdit, Package } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
 import { detectLanguageFromName } from '../utils/presets.ts';
@@ -30,9 +30,13 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
   const diffChange = request.kind === 'files' ? request.changes.find((c) => c.path === diffPath) : undefined;
 
   return (
-    <div className="rounded-xl border border-amber-500/50 bg-amber-950/20 p-3 text-xs space-y-2 select-text">
+    <div className="rounded-xl border border-amber-500/50 bg-amber-950/20 p-3 text-xs space-y-2 select-text" data-agent-approval={request.kind}>
       <div className="font-semibold text-amber-300">
-        {request.kind === 'files' ? t('approve.filesTitle', { count: request.changes.length }) : t('approve.runTitle')}
+        {request.kind === 'files'
+          ? t('approve.filesTitle', { count: request.changes.length })
+          : request.kind === 'run'
+            ? t('approve.runTitle')
+            : t('approve.installTitle')}
       </div>
 
       {request.kind === 'files' ? (
@@ -62,11 +66,29 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
             </div>
           ))}
         </div>
-      ) : (
+      ) : request.kind === 'run' ? (
         <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800">
           <Play className="w-3.5 h-3.5 text-emerald-400" />
           <span className="font-mono text-fg">{request.path}</span>
           <span className="text-slate-500">{t('approve.runNote')}</span>
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5 text-slate-400">
+            <Package className="w-3.5 h-3.5 text-amber-400" />
+            <span>{t('approve.installNote')}</span>
+          </div>
+          {[
+            ['pip', request.python],
+            ['npm', request.node],
+          ]
+            .filter(([, list]) => (list as string[]).length > 0)
+            .map(([mgr, list]) => (
+              <div key={mgr as string} className="flex items-start gap-2 px-2 py-1 rounded bg-panel border border-slate-800">
+                <span className="font-mono text-[10px] uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 shrink-0">{mgr as string}</span>
+                <span className="font-mono text-fg break-all">{(list as string[]).join(', ')}</span>
+              </div>
+            ))}
         </div>
       )}
 
@@ -76,7 +98,7 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
           className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
         >
           <Check className="w-3.5 h-3.5" />
-          {request.kind === 'files' ? t('approve.apply') : t('approve.run')}
+          {request.kind === 'files' ? t('approve.apply') : request.kind === 'run' ? t('approve.run') : t('approve.install')}
         </button>
         <button
           onClick={() => onAnswer('all')}

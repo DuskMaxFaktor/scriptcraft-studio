@@ -81,7 +81,14 @@ export async function runProjectFile(
 }
 
 interface AgentStepResponse {
-  step: { message: string; files: { path: string; content: string }[]; run: string | null; done: boolean; planStep?: number | null };
+  step: {
+    message: string;
+    files: { path: string; content: string }[];
+    run: string | null;
+    done: boolean;
+    planStep?: number | null;
+    install?: { python: string[]; node: string[] } | null;
+  };
   notice: string | null;
   model: string;
 }
@@ -98,10 +105,71 @@ async function describePackages(projectId?: string | null): Promise<string> {
   }
 }
 
+/** Install one manager's packages into the project and stream the output to completion. */
+async function installOne(
+  projectId: string,
+  manager: 'pip' | 'npm',
+  packages: string[],
+  signal: AbortSignal
+): Promise<{ ok: boolean; output: string }> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/packages/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manager, packages }),
+    signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.runId) return { ok: false, output: data.error || `Install failed (HTTP ${res.status})` };
+  const ev = await fetch(`/api/run/${data.runId}/events`, { signal });
+  const reader = ev.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let out = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return { ok: false, output: out };
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '));
+      buf = buf.slice(i + 2);
+      if (!line) continue;
+      const m = JSON.parse(line.slice(6));
+      if (m.type === 'exit') {
+        reader.cancel().catch(() => {});
+        return { ok: m.code === 0, output: out };
+      }
+      if (typeof m.data === 'string') out += m.data;
+    }
+  }
+}
+
+/** Install the packages of an agent step (pip and/or npm); combined result. */
+async function installPackages(
+  projectId: string,
+  req: { python: string[]; node: string[] },
+  signal: AbortSignal
+): Promise<{ ok: boolean; output: string }> {
+  let ok = true;
+  let output = '';
+  if (req.python.length) {
+    const r = await installOne(projectId, 'pip', req.python, signal);
+    ok = ok && r.ok;
+    output += `pip install ${req.python.join(' ')}\n${r.output}\n`;
+  }
+  if (req.node.length) {
+    const r = await installOne(projectId, 'npm', req.node, signal);
+    ok = ok && r.ok;
+    output += `npm install ${req.node.join(' ')}\n${r.output}\n`;
+  }
+  return { ok, output: output.trim() };
+}
+
 /** What the agent wants to do and needs the user's approval for. */
 export type AgentApprovalRequest =
   | { kind: 'files'; changes: { path: string; oldContent: string | null; newContent: string }[] }
-  | { kind: 'run'; path: string };
+  | { kind: 'run'; path: string }
+  | { kind: 'install'; python: string[]; node: string[] };
 
 /** 'yes' = this action, 'all' = this and every following action of the current task, 'no' = stop. */
 export type AgentApproval = 'yes' | 'all' | 'no';
@@ -181,6 +249,7 @@ export function formatPlan(plan: AgentPlan, current: number | null, finished = f
 export type AgentEvent =
   | { kind: 'step'; text: string; changed: string[]; model: string; planStep: number | null }
   | { kind: 'run'; path: string; report: RunReport }
+  | { kind: 'install'; python: string[]; node: string[]; ok: boolean; output: string }
   | { kind: 'finished'; reason: 'done' | 'stopped' | 'rejected' | 'max-steps' | 'error'; steps: number; error?: string };
 
 export const AGENT_MAX_STEPS = 8;
@@ -265,6 +334,27 @@ export async function runAgent(opts: {
       }
       convo.push({ role: 'model', text: JSON.stringify(step) });
 
+      // Package installs: the user approves, then pip/npm run into the project's own packages folder
+      if (step.install && (step.install.python.length || step.install.node.length)) {
+        const { python, node } = step.install;
+        if (!opts.projectId) {
+          convo.push({ role: 'user', text: 'Cannot install packages: the project has not been saved yet. Continue without them.' });
+        } else if (!(await ask({ kind: 'install', python, node }))) {
+          return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
+        } else {
+          if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
+          const result = await installPackages(opts.projectId, { python, node }, opts.signal);
+          opts.onEvent({ kind: 'install', python, node, ok: result.ok, output: result.output });
+          convo.push({
+            role: 'user',
+            text:
+              `Package install ${result.ok ? 'succeeded' : 'FAILED'} (python: ${python.join(', ') || 'none'}; node: ${node.join(', ') || 'none'}).\n` +
+              `${clip(result.output, 1500)}\n\n` +
+              (result.ok ? 'The packages are now available. Continue.' : 'Do not rely on these packages; adjust your approach and continue.'),
+          });
+        }
+      }
+
       if (!step.run) {
         if (step.done) return opts.onEvent({ kind: 'finished', reason: 'done', steps });
         convo.push({ role: 'user', text: 'Continue with the next step.' });
@@ -293,6 +383,13 @@ export async function runAgent(opts: {
     if (opts.signal.aborted || err?.name === 'AbortError') return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
     opts.onEvent({ kind: 'finished', reason: 'error', steps, error: err?.message || String(err) });
   }
+}
+
+/** Markdown for a package install shown in the chat. */
+export function formatInstall(e: { python: string[]; node: string[]; ok: boolean; output: string }): string {
+  const names = [...e.python, ...e.node].map((p) => `\`${p}\``).join(', ');
+  const status = e.ok ? t('agent.installOk') : t('agent.installFail');
+  return `📦 **${t('agent.installTitle')}:** ${names} — ${status}\n\n\`\`\`text\n${clip(e.output, 2000)}\n\`\`\``;
 }
 
 /** Markdown for a run report shown in the chat. */

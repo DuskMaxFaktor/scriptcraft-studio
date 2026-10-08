@@ -342,6 +342,8 @@ export interface AgentStep {
   done: boolean;
   /** Number (1-based) of the approved plan step this answer works on */
   planStep: number | null;
+  /** Packages the agent wants installed into the project before continuing (the user approves first) */
+  install: { python: string[]; node: string[] } | null;
 }
 
 const AGENT_SYSTEM = `You are an autonomous coding agent working inside ScriptCraft Studio, a local code studio on the user's Windows PC.
@@ -349,13 +351,14 @@ You work in steps. In every step you answer ONLY with JSON matching the schema:
 - "message": a short note for the user about what you are doing in this step (markdown allowed).
 - "files": files to create or overwrite in the project, each with the path and the COMPLETE new content (never a fragment, never "..." placeholders). Use [] if nothing changes.
 - "run": path of ONE project file to execute now to verify your work, or null.
+- "install": packages to add to the project when the task truly needs a third-party library, as {"python": ["name"], "node": ["name"]} (either list may be empty), or null. The user approves before anything is installed; after that the packages are importable. Keep the list minimal and prefer the standard library.
 - "done": true only when the task is finished and verified.
 
 How running works:
 - Python (python 3), JavaScript (Node.js), TypeScript (tsx), Bash (Git Bash) and SQL (SQLite, fresh in-memory database) files can be run.
 - The whole project is copied to a temp folder and the file is run from its folder, so files can import each other.
 - Programs run NON-interactively: there is no stdin (input() would fail) and there is a 20 second time limit. Make programs demonstrate themselves with sample data.
-- Only the standard library / built-in Node modules and the packages listed as installed in the task are available. Do not use other pip/npm packages; if one is really needed, tell the user to install it via the Packages button.
+- Only the standard library / built-in Node modules and the packages listed as installed in the task are available by default. If another pip/npm package is really needed, request it via the "install" field (the user approves first); do not assume a package is present until it has been installed.
 - After a run you receive the exit code, stdout and stderr. If it failed, fix the code and run again.
 Keep the number of steps small. Do not rewrite files that do not need changes.
 If the task comes with an approved plan, follow it in order and set "planStep" to the number of the plan step this answer works on (otherwise null).`;
@@ -373,11 +376,30 @@ const AGENT_SCHEMA = {
       },
     },
     run: { type: 'STRING', nullable: true },
+    install: {
+      type: 'OBJECT',
+      nullable: true,
+      properties: {
+        python: { type: 'ARRAY', items: { type: 'STRING' } },
+        node: { type: 'ARRAY', items: { type: 'STRING' } },
+      },
+    },
     done: { type: 'BOOLEAN' },
     planStep: { type: 'INTEGER', nullable: true },
   },
   required: ['message', 'files', 'done'],
 };
+
+/** Clean a model-proposed install request: trim, dedupe, cap; null when there is nothing to install. */
+function parseInstall(raw: any): { python: string[]; node: string[] } | null {
+  const clean = (arr: any) =>
+    Array.isArray(arr)
+      ? [...new Set(arr.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean))].slice(0, 20)
+      : [];
+  const python = clean(raw?.python);
+  const node = clean(raw?.node);
+  return python.length || node.length ? { python, node } : null;
+}
 
 export async function handleAgentStep(params: {
   messages: ChatMessage[];
@@ -398,7 +420,7 @@ export async function handleAgentStep(params: {
   if (isExternalModel(preferred)) {
     const l = withReplyLanguage(
       agentSystem +
-        '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "done": boolean, "planStep": number or null}.',
+        '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "install": {"python": string[], "node": string[]} or null, "done": boolean, "planStep": number or null}.',
       toLlmMessages(messages),
       lang,
       true
@@ -433,6 +455,7 @@ export async function handleAgentStep(params: {
     run: typeof raw.run === 'string' && raw.run.trim() ? raw.run.trim().replace(/\\/g, '/').replace(/^\/+/, '') : null,
     done: !!raw.done,
     planStep: Number.isInteger(raw.planStep) && raw.planStep > 0 ? raw.planStep : null,
+    install: parseInstall(raw.install),
   };
   return { step, notice: r.notice, model: r.model };
 }
