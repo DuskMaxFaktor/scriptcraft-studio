@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Editor, { type OnMount } from '@monaco-editor/react';
 import { Play, Plus, RotateCcw, Trash2, ChevronUp, ChevronDown, Loader2, Code2, FileText, Circle } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
+import { useTheme } from '../theme.ts';
+import '../monacoSetup.ts';
 import { MarkdownPreview } from './MarkdownPreview.tsx';
 
 // Jupyter-style Python notebook. Cells (code / markdown) run against one long-lived kernel that keeps
@@ -92,7 +95,64 @@ function serializeNotebook(cells: Cell[]): string {
   return JSON.stringify(nb, null, 1);
 }
 
-// ---------- a code cell's text editor (auto-growing) ----------
+// ---------- a code cell's editor (Monaco, syntax-highlighted, auto-growing) ----------
+const CellEditor: React.FC<{ cellId: string; value: string; onChange: (v: string) => void; onRun: () => void }> = ({ cellId, value, onChange, onRun }) => {
+  const { theme } = useTheme();
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const onRunRef = useRef(onRun);
+  onRunRef.current = onRun;
+
+  const handleMount: OnMount = (editor, monaco) => {
+    const fit = () => {
+      const h = Math.min(Math.max(editor.getContentHeight(), 22), 1200);
+      if (wrapRef.current) {
+        wrapRef.current.style.height = h + 'px';
+        editor.layout({ width: wrapRef.current.clientWidth, height: h });
+      }
+    };
+    editor.onDidContentSizeChange(fit);
+    fit();
+    // Shift+Enter / Ctrl+Enter run the cell (instead of inserting a newline)
+    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => onRunRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => onRunRef.current());
+  };
+
+  return (
+    <div ref={wrapRef} className="w-full">
+      <Editor
+        path={`nb-${cellId}.py`}
+        language="python"
+        value={value}
+        onChange={(v) => onChange(v ?? '')}
+        onMount={handleMount}
+        theme={theme === 'light' ? 'scriptcraft-light' : 'scriptcraft-dark'}
+        options={{
+          fontSize: 12.5,
+          fontFamily: "'Fira Code', 'JetBrains Mono', Consolas, monospace",
+          lineNumbers: 'off',
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          folding: false,
+          glyphMargin: false,
+          lineDecorationsWidth: 0,
+          lineNumbersMinChars: 0,
+          overviewRulerLanes: 0,
+          renderLineHighlight: 'none',
+          scrollbar: { vertical: 'hidden', horizontalScrollbarSize: 8, alwaysConsumeMouseWheel: false },
+          wordWrap: 'on',
+          automaticLayout: false,
+          padding: { top: 6, bottom: 6 },
+          tabSize: 4,
+          bracketPairColorization: { enabled: true },
+          guides: { indentation: false },
+          contextmenu: false,
+        }}
+      />
+    </div>
+  );
+};
+
+// ---------- a markdown cell's text editor (auto-growing) ----------
 const CodeArea: React.FC<{ value: string; onChange: (v: string) => void; onRun: () => void; placeholder: string }> = ({ value, onChange, onRun, placeholder }) => {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -324,14 +384,13 @@ export const NotebookView: React.FC<Props> = ({ content, projectId, onChange }) 
                 <div onDoubleClick={() => update(cell.id, { edit: true })} className="min-h-[2rem] cursor-text" data-md-cell>
                   {cell.source.trim() ? <MarkdownPreview content={cell.source} projectId={projectId || undefined} /> : <div className="p-3 text-slate-500 text-xs italic">{t('nb.emptyMd')}</div>}
                 </div>
+              ) : cell.type === 'code' ? (
+                <div className="bg-deep/40">
+                  <CellEditor cellId={cell.id} value={cell.source} onChange={(v) => update(cell.id, { source: v })} onRun={() => runCell(cell)} />
+                </div>
               ) : (
-                <div className={cell.type === 'markdown' ? 'bg-panel/40' : 'bg-deep/40'}>
-                  <CodeArea
-                    value={cell.source}
-                    onChange={(v) => update(cell.id, { source: v })}
-                    onRun={() => runCell(cell)}
-                    placeholder={cell.type === 'markdown' ? t('nb.mdPlaceholder') : t('nb.codePlaceholder')}
-                  />
+                <div className="bg-panel/40">
+                  <CodeArea value={cell.source} onChange={(v) => update(cell.id, { source: v })} onRun={() => runCell(cell)} placeholder={t('nb.mdPlaceholder')} />
                 </div>
               )}
 

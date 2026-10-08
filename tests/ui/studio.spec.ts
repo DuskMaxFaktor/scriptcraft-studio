@@ -454,6 +454,8 @@ test('notebook: markdown renders and a code cell runs against a stateful kernel'
   // The notebook view opens (not the plain code editor), markdown renders
   await expect(page.locator('[data-notebook]')).toBeVisible();
   await expect(page.locator('[data-md-cell] h1')).toHaveText('Мой ноутбук');
+  // Code cells are real Monaco editors (syntax-highlighted), not plain text areas
+  await expect(page.locator('[data-cell-type="code"] .monaco-editor').first()).toBeVisible();
 
   // Run all: the kernel keeps state, so the 2nd code cell sees `a` from the 1st and prints 42
   await page.getByRole('button', { name: 'Запустить всё', exact: true }).click();
