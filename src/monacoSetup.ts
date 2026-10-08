@@ -1,6 +1,8 @@
 // Monaco (the VS Code editor) bundled locally, so the studio works offline.
 import * as monaco from 'monaco-editor';
 import { loader } from '@monaco-editor/react';
+import { emmetHTML, emmetCSS } from 'emmet-monaco-es';
+import { registerSnippets } from './snippets.ts';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 import JsonWorker from 'monaco-editor/language/json/json.worker?worker';
 import CssWorker from 'monaco-editor/language/css/css.worker?worker';
@@ -66,6 +68,11 @@ monaco.editor.defineTheme('scriptcraft-light', {
 // Always use LF line endings: on Windows Monaco would default to CRLF, which breaks bash scripts
 // ("$'\r': command not found") and makes files differ from what other tools write
 monaco.editor.onDidCreateModel((model) => model.setEOL(monaco.editor.EndOfLineSequence.LF));
+
+// Code snippets (type a prefix, pick from the completion list) and Emmet (type an abbreviation and Tab)
+registerSnippets(monaco);
+emmetHTML(monaco); // HTML abbreviations: div.box>ul>li*3 ...
+emmetCSS(monaco); // CSS abbreviations: m10, p20, df ...
 
 loader.config({ monaco });
 

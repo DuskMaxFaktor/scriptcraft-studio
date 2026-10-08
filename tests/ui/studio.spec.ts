@@ -463,6 +463,29 @@ test('notebook: markdown renders and a code cell runs against a stateful kernel'
   await page.goto('about:blank');
 });
 
+test('snippets: a prefix expands to a template with tab stops', async ({ page, request }) => {
+  await openStudio(page, request, 'Сниппеты', [{ name: 'main.js', language: 'javascript', content: '', isEntry: true }]);
+  const editor = page.locator('.monaco-editor').first();
+  await editor.click();
+  await page.keyboard.type('forof', { delay: 25 }); // a unique prefix: only our snippet matches
+  await page.keyboard.press('Control+Space');
+  const row = page.locator('.suggest-widget .monaco-list-row', { hasText: 'forof' }).first();
+  await expect(row).toBeVisible();
+  await row.click(); // accept our snippet explicitly (not whatever Tab might do)
+  await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('for (const item of items)');
+});
+
+test('emmet: an HTML abbreviation expands on Tab', async ({ page, request }) => {
+  await openStudio(page, request, 'Emmet', [{ name: 'index.html', language: 'html', content: '', isEntry: true }]);
+  const editor = page.locator('.monaco-editor').first();
+  await editor.click();
+  await page.keyboard.type('ul>li*2', { delay: 25 });
+  await page.keyboard.press('Tab'); // Emmet expands the abbreviation
+  const lines = page.locator('.monaco-editor .view-lines').first();
+  await expect(lines).toContainText('<ul>');
+  await expect(lines).toContainText('<li></li>');
+});
+
 test('build .exe from the Export menu', async ({ page, request }) => {
   test.setTimeout(240_000);
   const project = await openStudio(page, request, 'Сборка', [{ name: 'hello.py', content: 'print("hello from exe")', isEntry: true }]);

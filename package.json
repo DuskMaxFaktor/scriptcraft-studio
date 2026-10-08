@@ -19,6 +19,7 @@
     "@google/genai": "^2.4.0",
     "@lydell/node-pty": "^1.2.0-beta.15",
     "dotenv": "^17.2.3",
+    "emmet-monaco-es": "^5.7.0",
     "express": "^4.21.2",
     "jszip": "^3.10.2",
     "prettier": "^3.9.9",
