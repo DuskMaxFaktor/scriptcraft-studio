@@ -7,7 +7,7 @@ import { QuickOpen } from './components/QuickOpen.tsx'; // small; must catch key
 import { lazyNamed, Deferred } from './utils/lazy.tsx';
 import { stripAnsi } from './utils/ansi.tsx';
 import type { DebugUiState } from './components/DebugPanel.tsx';
-import { startDebugSession, debuggableLanguage, type Breakpoints, type DebugSessionHandle, type DebugCommand } from './utils/debugClient.ts';
+import { startDebugSession, debuggableLanguage, type Breakpoints, type Breakpoint, type DebugSessionHandle, type DebugCommand } from './utils/debugClient.ts';
 import { getSelectedModelId } from './utils/models.ts';
 import {
   projectsApi,
@@ -180,20 +180,35 @@ export default function App() {
   breakpointsRef.current = breakpoints;
   const [debugUi, setDebugUi] = useState<DebugUiState | null>(null);
   const debugRef = useRef<DebugSessionHandle | null>(null);
+  // Watch expressions per project (evaluated at every pause)
+  const [watches, setWatches] = useState<string[]>([]);
+  const watchesRef = useRef<string[]>([]);
+  watchesRef.current = watches;
 
   useEffect(() => {
     const id = currentProject?.id;
+    try {
+      setWatches(id ? JSON.parse(localStorage.getItem(`scriptcraft-watch-${id}`) || '[]') : []);
+    } catch {
+      setWatches([]);
+    }
     if (!id) return setBreakpoints({});
     try {
-      setBreakpoints(JSON.parse(localStorage.getItem(`scriptcraft-bp-${id}`) || '{}'));
+      const raw = JSON.parse(localStorage.getItem(`scriptcraft-bp-${id}`) || '{}');
+      // Migrate the old "file -> [line numbers]" format to "file -> [{line, condition?}]"
+      const migrated: Breakpoints = {};
+      for (const [file, list] of Object.entries(raw)) {
+        if (Array.isArray(list)) migrated[file] = list.map((b: any) => (typeof b === 'number' ? { line: b } : b)).filter((b: any) => b && typeof b.line === 'number');
+      }
+      setBreakpoints(migrated);
     } catch {
       setBreakpoints({});
     }
   }, [currentProject?.id]);
 
-  const updateBreakpoints = (fileName: string, lines: number[]) => {
-    const next = { ...breakpointsRef.current, [fileName]: lines };
-    if (lines.length === 0) delete next[fileName];
+  const updateBreakpoints = (fileName: string, bps: Breakpoint[]) => {
+    const next = { ...breakpointsRef.current, [fileName]: bps };
+    if (bps.length === 0) delete next[fileName];
     setBreakpoints(next);
     breakpointsRef.current = next;
     try {
@@ -202,6 +217,32 @@ export default function App() {
       // storage unavailable
     }
     debugRef.current?.setBreakpoints(next); // a running session picks them up immediately
+  };
+
+  const persistWatches = (list: string[]) => {
+    try {
+      if (currentProjectRef.current) localStorage.setItem(`scriptcraft-watch-${currentProjectRef.current.id}`, JSON.stringify(list));
+    } catch {
+      // storage unavailable
+    }
+  };
+  const addWatch = (expr: string) => {
+    const e = expr.trim();
+    if (!e || watchesRef.current.includes(e)) return;
+    const next = [...watchesRef.current, e];
+    setWatches(next);
+    persistWatches(next);
+    if (debugUi?.status === 'paused') debugRef.current?.evaluate(e); // show a value right away
+  };
+  const removeWatch = (expr: string) => {
+    const next = watchesRef.current.filter((w) => w !== expr);
+    setWatches(next);
+    persistWatches(next);
+    setDebugUi((prev) => {
+      if (!prev) return prev;
+      const { [expr]: _removed, ...rest } = prev.watchResults;
+      return { ...prev, watchResults: rest };
+    });
   };
 
   // The file on the right side of the split editor (closed when that file is deleted)
@@ -249,7 +290,9 @@ export default function App() {
         breakpoints: breakpointsRef.current,
         upsertLog,
         onStopped: (stopped) => {
-          setDebugUi((prev) => ({ status: 'paused', stopped, evals: prev?.evals || [] }));
+          // A fresh pause: clear old watch values, then re-evaluate every watch expression
+          setDebugUi((prev) => ({ status: 'paused', stopped, evals: prev?.evals || [], watchResults: {} }));
+          for (const expr of watchesRef.current) debugRef.current?.evaluate(expr);
           if (stopped.file) {
             const f = filesRef.current.find((x) => x.name === stopped.file);
             if (f) setActiveFileId(f.id);
@@ -257,11 +300,18 @@ export default function App() {
           setExecutionTab('debug');
         },
         onRunning: () => setDebugUi((prev) => (prev ? { ...prev, status: 'running' } : prev)),
-        onEval: (r) => setDebugUi((prev) => (prev ? { ...prev, evals: [...prev.evals, r] } : prev)),
+        onEval: (r) =>
+          setDebugUi((prev) =>
+            prev
+              ? watchesRef.current.includes(r.expr)
+                ? { ...prev, watchResults: { ...prev.watchResults, [r.expr]: r } }
+                : { ...prev, evals: [...prev.evals, r] }
+              : prev
+          ),
       });
       debugRef.current = handle;
       setActiveRun(handle.run);
-      setDebugUi({ status: 'running', stopped: null, evals: [] });
+      setDebugUi({ status: 'running', stopped: null, evals: [], watchResults: {} });
       await handle.run.done;
     } catch (err: any) {
       addLog({ id: generateId(), type: 'error', message: t('debug.failed', { error: err?.message || String(err) }), timestamp: getTimestamp() });
@@ -1123,7 +1173,7 @@ export default function App() {
               onRun={() => handleRunCode()}
               reveal={reveal}
               breakpoints={activeFile ? breakpoints[activeFile.name] || [] : []}
-              onBreakpointsChange={(lines) => activeFile && updateBreakpoints(activeFile.name, lines)}
+              onBreakpointsChange={(bps) => activeFile && updateBreakpoints(activeFile.name, bps)}
               debugLine={debugUi?.status === 'paused' && debugUi.stopped?.file === activeFile?.name ? debugUi.stopped.line : null}
               activeFile={activeFile}
               onUpdateContent={handleUpdateFileContent}
@@ -1183,6 +1233,9 @@ export default function App() {
             onDebugCommand={debugCommand}
             onDebugStop={() => activeRun?.stop().catch(() => {})}
             onDebugEvaluate={(expr) => debugRef.current?.evaluate(expr)}
+            watches={watches}
+            onAddWatch={addWatch}
+            onRemoveWatch={removeWatch}
             onOpenFrame={openFileAt}
             previewVersion={previewVersion}
             projectId={currentProject?.id || null}

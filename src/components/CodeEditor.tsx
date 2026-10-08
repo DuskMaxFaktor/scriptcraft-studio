@@ -19,6 +19,7 @@ import {
   Eye,
 } from 'lucide-react';
 import { MarkdownPreview } from './MarkdownPreview.tsx';
+import type { Breakpoint } from '../utils/debugClient.ts';
 import { FileItem, FileLanguage } from '../types.ts';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
@@ -53,9 +54,9 @@ interface CodeEditorProps {
   onRun: () => void;
   /** Select and scroll to a range (from project search); nonce makes repeated clicks work */
   reveal?: { fileId: string; line: number; column: number; length: number; nonce: number } | null;
-  /** Breakpoint lines of the active file (click the left margin to toggle) */
-  breakpoints?: number[];
-  onBreakpointsChange?: (lines: number[]) => void;
+  /** Breakpoints of the active file (left-click the margin to toggle, right-click for a condition) */
+  breakpoints?: Breakpoint[];
+  onBreakpointsChange?: (bps: Breakpoint[]) => void;
   /** Line where the debugger is paused in the active file */
   debugLine?: number | null;
   /** Current project (its pyproject.toml / .prettierrc settings apply to formatting) */
@@ -172,11 +173,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     if (!editor || !bpCollectionRef.current || !debugCollectionRef.current) return;
     const { breakpoints: bps, debugLine: dl } = bpPropsRef.current;
     bpCollectionRef.current.set(
-      bps.map((line) => ({
-        range: new monaco.Range(line, 1, line, 1),
+      bps.map((bp) => ({
+        range: new monaco.Range(bp.line, 1, bp.line, 1),
         options: {
-          glyphMarginClassName: 'sc-breakpoint',
-          glyphMarginHoverMessage: { value: t('debug.breakpointHover') },
+          glyphMarginClassName: bp.condition ? 'sc-breakpoint sc-breakpoint-cond' : 'sc-breakpoint',
+          glyphMarginHoverMessage: { value: bp.condition ? t('debug.breakpointCondHover', { cond: bp.condition }) : t('debug.breakpointHover') },
           stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         },
       }))
@@ -193,10 +194,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     );
   };
 
+  const bpKey = breakpoints.map((b) => (b.condition ? `${b.line}:${b.condition}` : `${b.line}`)).join(',');
   useEffect(() => {
     applyDecorations();
     if (debugLine) editorRef.current?.revealLineInCenterIfOutsideViewport(debugLine);
-  }, [breakpoints.join(','), debugLine, activeFile.id]);
+  }, [bpKey, debugLine, activeFile.id]);
 
   // Formatting and Ruff checks need the file name (editor models are keyed by file id)
   useEffect(() => subscribeCodeTools(setTools), []);
@@ -238,22 +240,38 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
     bpCollectionRef.current = editor.createDecorationsCollection();
     debugCollectionRef.current = editor.createDecorationsCollection();
-    // Click in the left margin (or on a line number) toggles a breakpoint
+    // Left-click in the left margin toggles a breakpoint; right-click sets/edits a condition
     editor.onMouseDown((e) => {
       const type = e.target.type;
       if (type !== m.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && type !== m.editor.MouseTargetType.GUTTER_LINE_DECORATIONS) return;
       const line = e.target.position?.lineNumber;
       const { breakpoints: bps, onBreakpointsChange: change } = bpPropsRef.current;
       if (!line || !change) return;
-      change(bps.includes(line) ? bps.filter((l) => l !== line) : [...bps, line].sort((a, b) => a - b));
+      if (e.event.rightButton) {
+        e.event.preventDefault();
+        const existing = bps.find((b) => b.line === line);
+        const cond = window.prompt(t('debug.conditionPrompt'), existing?.condition || '');
+        if (cond === null) return; // cancelled: no change
+        const trimmed = cond.trim();
+        const rest = bps.filter((b) => b.line !== line);
+        change([...rest, { line, ...(trimmed ? { condition: trimmed } : {}) }].sort((a, b) => a.line - b.line));
+        return;
+      }
+      change(bps.some((b) => b.line === line) ? bps.filter((b) => b.line !== line) : [...bps, { line }].sort((a, b) => a.line - b.line));
     });
-    // Breakpoints move with their lines when code above is added or removed
+    // Breakpoints move with their lines when code above is added or removed (conditions kept by order)
     editor.onDidChangeModelContent(() => {
       const coll = bpCollectionRef.current;
       const { breakpoints: bps, onBreakpointsChange: change } = bpPropsRef.current;
       if (!coll || !change) return;
-      const lines = [...new Set(coll.getRanges().map((r) => r.startLineNumber))].sort((a, b) => a - b);
-      if (lines.join(',') !== bps.join(',')) change(lines);
+      const ranges = coll.getRanges();
+      const moved: { line: number; condition?: string }[] = ranges.map((r, i) => ({ line: r.startLineNumber, ...(bps[i]?.condition ? { condition: bps[i].condition } : {}) }));
+      // Collapse duplicates that may appear if two breakpoints end up on the same line
+      const byLine = new Map<number, { line: number; condition?: string }>();
+      for (const b of moved) if (!byLine.has(b.line)) byLine.set(b.line, b);
+      const next = [...byLine.values()].sort((a, b) => a.line - b.line);
+      const key = (list: typeof next) => list.map((b) => (b.condition ? `${b.line}:${b.condition}` : `${b.line}`)).join(',');
+      if (key(next) !== key(bps)) change(next);
     });
     editor.onDidChangeModelContent(() => {
       const model = editor.getModel();

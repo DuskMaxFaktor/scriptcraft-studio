@@ -463,6 +463,39 @@ for (const [language, p] of Object.entries(debugProjects)) {
   });
 }
 
+// A conditional breakpoint stops only when its expression is true
+const condBreakpoints = {
+  python: { line: 6, condition: 'v == 2' },
+  javascript: { line: 5, condition: 'v === 2' },
+};
+for (const [language, p] of Object.entries(debugProjects)) {
+  test(`debugger (${language}): a conditional breakpoint stops only when the condition holds`, { skip: language === 'python' && !hasPython && 'python not installed' }, async () => {
+    const entry = p.files.find((f) => f.name === p.entry)!;
+    const { line, condition } = condBreakpoints[language as 'python' | 'javascript'];
+    const { data } = await api('POST', '/api/debug/start', {
+      language,
+      code: entry.content,
+      files: p.files,
+      entry: p.entry,
+      breakpoints: { [p.entry]: [{ line, condition }] },
+    });
+    assert.ok(data.runId, JSON.stringify(data));
+    const next = await debugEvents(data.runId);
+    const cmd = (c: string, extra: object = {}) => api('POST', `/api/debug/${data.runId}/command`, { cmd: c, ...extra });
+
+    // It skips v=1 and stops on v=2, by which point total already holds double(1)=2
+    const stop = await next();
+    assert.equal(stop.event, 'stopped');
+    assert.equal(stop.reason, 'breakpoint');
+    const vars = Object.fromEntries(stop.locals.map((v: any) => [v.name, v.value]));
+    assert.equal(vars.v, '2');
+    assert.equal(vars.total, '2');
+
+    await cmd('continue');
+    assert.equal((await next()).event, 'terminated'); // v=3 does not satisfy the condition
+  });
+}
+
 // ---------------- web preview ----------------
 
 test('web preview: serves project files as a site on its own port, safely', async () => {

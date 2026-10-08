@@ -368,6 +368,10 @@ body.resizing-y iframe {
   background: radial-gradient(circle at center, #e5484d 0 5px, transparent 5.5px);
   cursor: pointer;
 }
+/* Conditional breakpoint: an amber dot with a ring, so it reads differently from a plain one */
+.monaco-editor .sc-breakpoint-cond {
+  background: radial-gradient(circle at center, #f5a623 0 3px, transparent 3.5px, #f5a623 4px 5px, transparent 5.5px);
+}
 .monaco-editor .glyph-margin { cursor: pointer; }
 .monaco-editor .sc-debug-line {
   background: rgba(250, 204, 21, 0.18);

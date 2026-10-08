@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Play, ArrowRightToLine, ArrowDownToLine, ArrowUpFromLine, Square, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { Play, ArrowRightToLine, ArrowDownToLine, ArrowUpFromLine, Square, ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import type { StoppedState, EvalResult, DebugCommand, DebugVariable } from '../utils/debugClient.ts';
 
@@ -7,6 +7,8 @@ export interface DebugUiState {
   status: 'running' | 'paused';
   stopped: StoppedState | null;
   evals: EvalResult[];
+  /** Latest value of each watch expression, re-evaluated at every pause */
+  watchResults: Record<string, EvalResult>;
 }
 
 interface DebugPanelProps {
@@ -15,7 +17,62 @@ interface DebugPanelProps {
   onStop: () => void;
   onEvaluate: (expr: string) => void;
   onOpenFrame: (file: string, line: number) => void;
+  /** Watch expressions and how to change them */
+  watches: string[];
+  onAddWatch: (expr: string) => void;
+  onRemoveWatch: (expr: string) => void;
 }
+
+/** Watch list: expressions kept across pauses, each showing its latest value. */
+const WatchList: React.FC<{
+  watches: string[];
+  results: Record<string, EvalResult>;
+  onAdd: (expr: string) => void;
+  onRemove: (expr: string) => void;
+}> = ({ watches, results, onAdd, onRemove }) => {
+  const { t } = useI18n();
+  const [expr, setExpr] = useState('');
+  return (
+    <div className="mb-3" data-watch-panel>
+      <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider pb-1">{t('debug.watch')}</div>
+      <input
+        value={expr}
+        onChange={(e) => setExpr(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && expr.trim()) {
+            onAdd(expr.trim());
+            setExpr('');
+          }
+        }}
+        placeholder={t('debug.watchPlaceholder')}
+        data-watch-input
+        className="w-full bg-deep border border-slate-700 rounded px-2 py-1 font-mono text-[11px] text-fg placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+      />
+      {watches.length === 0 && <div className="text-slate-600 text-[11px] py-1">{t('debug.watchEmpty')}</div>}
+      {watches.map((w) => {
+        const r = results[w];
+        return (
+          <div key={w} className="group flex items-baseline gap-2 py-0.5 font-mono text-[11px] select-text" data-watch-row>
+            <span className="text-sky-300 shrink-0">{w}</span>
+            <span className="text-slate-600 shrink-0">→</span>
+            {r ? (
+              r.error ? <span className="text-rose-400 truncate">{r.error}</span> : <span className="text-fg truncate">{r.value}</span>
+            ) : (
+              <span className="text-slate-600 truncate">—</span>
+            )}
+            <button
+              onClick={() => onRemove(w)}
+              className="ml-auto shrink-0 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100"
+              title={t('debug.watchRemove')}
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 const VarList: React.FC<{ title: string; vars: DebugVariable[]; defaultOpen?: boolean }> = ({ title, vars, defaultOpen = true }) => {
   const [open, setOpen] = useState(defaultOpen);
@@ -38,7 +95,7 @@ const VarList: React.FC<{ title: string; vars: DebugVariable[]; defaultOpen?: bo
   );
 };
 
-export const DebugPanel: React.FC<DebugPanelProps> = ({ state, onCommand, onStop, onEvaluate, onOpenFrame }) => {
+export const DebugPanel: React.FC<DebugPanelProps> = ({ state, onCommand, onStop, onEvaluate, onOpenFrame, watches, onAddWatch, onRemoveWatch }) => {
   const { t } = useI18n();
   const [expr, setExpr] = useState('');
 
@@ -109,8 +166,9 @@ export const DebugPanel: React.FC<DebugPanelProps> = ({ state, onCommand, onStop
             : <div className="text-slate-600 text-[11px]">—</div>}
         </div>
 
-        {/* Variables + evaluate */}
+        {/* Watch + variables + evaluate */}
         <div className="flex-1 min-w-0 overflow-y-auto p-2">
+          <WatchList watches={watches} results={state.watchResults} onAdd={onAddWatch} onRemove={onRemoveWatch} />
           {paused && s ? (
             <>
               {s.locals.length > 0 && <VarList title={t('debug.locals')} vars={s.locals} />}

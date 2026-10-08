@@ -248,6 +248,7 @@ export const Header: React.FC<HeaderProps> = ({
         {!canStop && (
           <button
             onClick={onDebug}
+            data-debug-start
             disabled={isRunning || !canDebug}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border border-slate-700 bg-panel hover:bg-hover text-slate-200 disabled:opacity-40 transition-colors"
             title={canDebug ? t('debug.startTitle') : t('debug.unsupported')}

@@ -88,10 +88,20 @@ class StudioDebugger(bdb.Bdb):
 
     def apply_breakpoints(self, breakpoints):
         self.clear_all_breaks()
-        for rel, lines in breakpoints.items():
+        for rel, items in breakpoints.items():
             path = os.path.join(self.root, rel)
-            for line in lines:
-                self.set_break(path, int(line))  # returns an error text for lines without code; ignored
+            for item in items:
+                # Either a bare line number or {"line": N, "condition": "expr"}
+                if isinstance(item, dict):
+                    line = item.get("line")
+                    cond = item.get("condition") or None
+                else:
+                    line = item
+                    cond = None
+                if line is None:
+                    continue
+                # bdb evaluates `cond` in the frame on each hit; a crashing condition is treated as a hit
+                self.set_break(path, int(line), cond=cond)  # returns an error text for lines without code; ignored
 
     # Only ever stop in the project's own files, never inside the standard library
     def stop_here(self, frame):

@@ -10,7 +10,29 @@ import { prepareRun, attachPackages, cleanup, spawnCommand, startSession, type P
 //   Python:     api/debug/py_runner.py (bdb) connected over a local TCP socket (JSON lines)
 //   JavaScript: Node's inspector (Chrome DevTools Protocol) over WebSocket
 
-type Breakpoints = Record<string, number[]>; // project file path -> 1-based lines
+/** A breakpoint: a 1-based line, optionally conditional (stops only when the expression is truthy). */
+export interface Breakpoint {
+  line: number;
+  condition?: string;
+}
+type Breakpoints = Record<string, Breakpoint[]>; // project file path -> breakpoints
+
+/** Accept either plain line numbers or {line, condition} objects; keep only valid, positive lines. */
+function normalizeBreakpoints(raw: unknown): Breakpoints {
+  const out: Breakpoints = {};
+  for (const [file, list] of Object.entries((raw as Record<string, unknown>) || {})) {
+    if (!Array.isArray(list)) continue;
+    const bps: Breakpoint[] = [];
+    for (const item of list) {
+      const line = Number(typeof item === 'object' && item ? (item as any).line : item);
+      if (!Number.isInteger(line) || line <= 0) continue;
+      const condition = typeof item === 'object' && item && typeof (item as any).condition === 'string' ? (item as any).condition.trim().slice(0, 1000) : '';
+      bps.push(condition ? { line, condition } : { line });
+    }
+    out[file] = bps;
+  }
+  return out;
+}
 
 export interface DebugVariable {
   name: string;
@@ -157,11 +179,15 @@ function startNode(s: DebugSession, root: string, entryAbs: string, bps: Breakpo
     currentBps = b;
     for (const id of breakpointIds) await send('Debugger.removeBreakpoint', { breakpointId: id });
     breakpointIds = [];
-    for (const [rel, lines] of Object.entries(b)) {
+    for (const [rel, bps] of Object.entries(b)) {
       // match the file by its absolute file:// URL (case-insensitive on Windows)
       const url = pathToFileURL(path.join(root, rel)).href;
-      for (const line of lines) {
-        const r = await send('Debugger.setBreakpointByUrl', { lineNumber: line - 1, urlRegex: `^${ciPattern(url)}$` });
+      for (const bp of bps) {
+        const r = await send('Debugger.setBreakpointByUrl', {
+          lineNumber: bp.line - 1,
+          urlRegex: `^${ciPattern(url)}$`,
+          ...(bp.condition ? { condition: bp.condition } : {}),
+        });
         if (r?.breakpointId) breakpointIds.push(r.breakpointId);
       }
     }
@@ -284,11 +310,7 @@ debugRouter.post('/start', async (req, res) => {
   const prepared = prepareRun(lang, code, files as ProjectFileInput[], entry, typeof projectId === 'string' ? projectId : undefined);
   if (!prepared?.rootDir) return res.status(400).json({ error: 'Cannot prepare the project for debugging' });
 
-  // Breakpoints: only plain "path -> positive line numbers"
-  const bps: Breakpoints = {};
-  for (const [file, lines] of Object.entries(breakpoints || {})) {
-    if (Array.isArray(lines)) bps[file] = lines.map(Number).filter((n) => Number.isInteger(n) && n > 0);
-  }
+  const bps = normalizeBreakpoints(breakpoints);
 
   const env = attachPackages(prepared, typeof projectId === 'string' ? projectId : undefined);
   const s: DebugSession = { runId: '', adapter: null, events: [], listeners: new Set() };
@@ -342,11 +364,7 @@ debugRouter.post('/:id/command', (req, res) => {
   if (!s?.adapter) return res.status(404).json({ error: 'Debug session not found' });
   const cmd = req.body?.cmd;
   if (cmd === 'setBreakpoints') {
-    const bps: Breakpoints = {};
-    for (const [file, lines] of Object.entries(req.body?.breakpoints || {})) {
-      if (Array.isArray(lines)) bps[file] = lines.map(Number).filter((n) => Number.isInteger(n) && n > 0);
-    }
-    s.adapter.setBreakpoints(bps);
+    s.adapter.setBreakpoints(normalizeBreakpoints(req.body?.breakpoints));
   } else if (cmd === 'eval') {
     s.adapter.evaluate(String(req.body?.expr || '').slice(0, 2000));
   } else if (['continue', 'next', 'step', 'out', 'stop'].includes(cmd)) {

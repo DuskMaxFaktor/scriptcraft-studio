@@ -409,6 +409,32 @@ test('chat: attach an image, it previews, is sent to the model and shows in the 
   await expect(page.locator('[data-chat-images]')).toHaveCount(0);
 });
 
+test('debugger: a conditional breakpoint stops on the right iteration and watches show values', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const code = 'total = 0\nfor v in [1, 2, 3]:\n    total += v * 2\nprint(total)\n';
+  const project = (await (await request.post('/api/projects', { data: { name: 'Отладка', files: [{ name: 'main.py', language: 'python', content: code, isEntry: true }] } })).json()) as { id: string };
+  // Seed a conditional breakpoint and watches the way the studio stores them
+  await page.addInitScript((id) => {
+    localStorage.setItem('scriptcraft-last-project', id);
+    localStorage.setItem('scriptcraft-bp-' + id, JSON.stringify({ 'main.py': [{ line: 3, condition: 'v == 2' }] }));
+    localStorage.setItem('scriptcraft-watch-' + id, JSON.stringify(['total', 'v']));
+  }, project.id);
+  await page.goto('/');
+  await expect(page.locator('.monaco-editor').first()).toBeVisible();
+
+  await page.locator('[data-debug-start]').click();
+
+  // It skips v=1 and pauses on v=2; by then total already holds double(1)=2
+  await expect(page.getByText(/Остановка на точке останова: main\.py:3/)).toBeVisible({ timeout: 30_000 });
+  const watch = page.locator('[data-watch-panel]');
+  await expect(watch.locator('[data-watch-row]', { hasText: 'total' })).toContainText('2');
+  await expect(watch.locator('[data-watch-row]', { hasText: /^v/ })).toContainText('2');
+
+  // Continue: v=3 fails the condition, so the program finishes
+  await page.getByRole('button', { name: 'Продолжить', exact: true }).click();
+  await expect(page.locator('[data-debug-start]')).toBeEnabled({ timeout: 20_000 });
+});
+
 test('build .exe from the Export menu', async ({ page, request }) => {
   test.setTimeout(240_000);
   const project = await openStudio(page, request, 'Сборка', [{ name: 'hello.py', content: 'print("hello from exe")', isEntry: true }]);

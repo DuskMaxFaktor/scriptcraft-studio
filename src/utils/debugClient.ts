@@ -1,7 +1,12 @@
 import { LogEntry } from '../types.ts';
 import { attachRunStream, InteractiveRun } from './interactiveRun.ts';
 
-export type Breakpoints = Record<string, number[]>;
+/** A breakpoint: a 1-based line, optionally conditional (stops only when the expression is truthy). */
+export interface Breakpoint {
+  line: number;
+  condition?: string;
+}
+export type Breakpoints = Record<string, Breakpoint[]>;
 
 export interface DebugVariable {
   name: string;

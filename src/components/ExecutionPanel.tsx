@@ -53,6 +53,9 @@ interface ExecutionPanelProps {
   onDebugCommand: (cmd: DebugCommand) => void;
   onDebugStop: () => void;
   onDebugEvaluate: (expr: string) => void;
+  watches: string[];
+  onAddWatch: (expr: string) => void;
+  onRemoveWatch: (expr: string) => void;
   onOpenFrame: (file: string, line: number) => void;
   /** Increases after every autosave: the web preview reloads with the saved files */
   previewVersion: number;
@@ -80,6 +83,9 @@ export const ExecutionPanel: React.FC<ExecutionPanelProps> = ({
   onDebugCommand,
   onDebugStop,
   onDebugEvaluate,
+  watches,
+  onAddWatch,
+  onRemoveWatch,
   onOpenFrame,
   previewVersion,
   height,
@@ -445,7 +451,7 @@ export const ExecutionPanel: React.FC<ExecutionPanelProps> = ({
             </div>
           )}
           {activeTab === 'debug' && (
-            <DebugPanel state={debug} onCommand={onDebugCommand} onStop={onDebugStop} onEvaluate={onDebugEvaluate} onOpenFrame={onOpenFrame} />
+            <DebugPanel state={debug} onCommand={onDebugCommand} onStop={onDebugStop} onEvaluate={onDebugEvaluate} onOpenFrame={onOpenFrame} watches={watches} onAddWatch={onAddWatch} onRemoveWatch={onRemoveWatch} />
           )}
         </Suspense>
         {/* Console View */}
