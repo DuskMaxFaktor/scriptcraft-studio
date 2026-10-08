@@ -14,13 +14,46 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scriptcraft-exe-test-'));
 let server: import('http').Server;
 let base = '';
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A heavy PyInstaller build can saturate the machine and make one local request drop ("fetch failed");
+ *  retry on a network error (not on an HTTP error status, so real failures still surface). */
+async function fetchRetry(url: string, init?: RequestInit, tries = 5): Promise<Response> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      lastErr = e;
+      await sleep(400 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
 async function api(method: string, url: string, body?: unknown) {
-  const res = await fetch(base + url, {
+  const res = await fetchRetry(base + url, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, data: (await res.json().catch(() => null)) as any };
+}
+
+/** Read a run's event stream to completion; reconnect (the endpoint replays its buffer) until the
+ *  "exit" event is seen, so a dropped connection mid-build does not fail the test. */
+async function readRunEventsUntilExit(runId: string, tries = 6): Promise<string> {
+  let all = '';
+  for (let i = 0; i < tries; i++) {
+    try {
+      all = await (await fetchRetry(`${base}/api/run/${runId}/events`)).text();
+      if (all.split('\n').some((l) => l.startsWith('data: ') && /"type"\s*:\s*"exit"/.test(l))) return all;
+    } catch {
+      // dropped: reconnect and let the endpoint replay from its buffer
+    }
+    await sleep(500);
+  }
+  return all;
 }
 
 before(async () => {
@@ -71,7 +104,7 @@ test('build exe: project module + data file packed into one program that runs', 
 
   const start = await api('POST', `/api/projects/${p.id}/exe/build`, { entry: 'main.py', name: 'Приветствие' });
   assert.equal(start.status, 200, JSON.stringify(start.data));
-  const events = await (await fetch(`${base}/api/run/${start.data.runId}/events`)).text();
+  const events = await readRunEventsUntilExit(start.data.runId);
   const exit = events.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6))).find((e) => e.type === 'exit');
   assert.equal(exit?.code, 0, events.slice(-2000));
 
