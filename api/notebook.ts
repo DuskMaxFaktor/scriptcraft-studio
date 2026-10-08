@@ -35,7 +35,8 @@ function emit(k: Kernel, e: any) {
 
 function kernelEnv(projectId: string | null): { cwd: string; env: NodeJS.ProcessEnv } {
   let cwd = process.cwd();
-  const env: NodeJS.ProcessEnv = {};
+  // Non-interactive matplotlib: plots are captured inline, plt.show() never opens a blocking window
+  const env: NodeJS.ProcessEnv = { MPLBACKEND: 'Agg' };
   if (projectId && /^[a-zA-Z0-9_-]{1,80}$/.test(projectId)) {
     const dir = path.join(process.cwd(), 'projects', projectId);
     if (fs.existsSync(dir)) cwd = dir; // run relative to the project, like the rest of the studio

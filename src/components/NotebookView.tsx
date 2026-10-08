@@ -9,7 +9,7 @@ import { MarkdownPreview } from './MarkdownPreview.tsx';
 // Jupyter-style Python notebook. Cells (code / markdown) run against one long-lived kernel that keeps
 // its state between cells. The file is the standard .ipynb JSON, so it opens in Jupyter/VS Code too.
 
-type OutKind = 'stream' | 'result' | 'error';
+type OutKind = 'stream' | 'result' | 'error' | 'display';
 interface NbOutput {
   kind: OutKind;
   name?: 'stdout' | 'stderr';
@@ -17,6 +17,8 @@ interface NbOutput {
   ename?: string;
   evalue?: string;
   traceback?: string;
+  mime?: string; // for 'display' (e.g. image/png)
+  data?: string; // base64
 }
 interface Cell {
   id: string;
@@ -48,7 +50,10 @@ function parseNotebook(content: string): Cell[] {
           ? c.outputs
               .map((o: any): NbOutput | null => {
                 if (o.output_type === 'stream') return { kind: 'stream', name: o.name === 'stderr' ? 'stderr' : 'stdout', text: asText(o.text) };
-                if (o.output_type === 'execute_result' || o.output_type === 'display_data') return { kind: 'result', text: asText(o.data?.['text/plain']) };
+                if (o.output_type === 'execute_result' || o.output_type === 'display_data') {
+                  if (o.data?.['image/png']) return { kind: 'display', mime: 'image/png', data: asText(o.data['image/png']).replace(/\s/g, '') };
+                  return { kind: 'result', text: asText(o.data?.['text/plain']) };
+                }
                 if (o.output_type === 'error') return { kind: 'error', ename: o.ename, evalue: o.evalue, traceback: asText(o.traceback) };
                 return null;
               })
@@ -82,9 +87,11 @@ function serializeNotebook(cells: Cell[]): string {
             outputs: c.outputs.map((o) =>
               o.kind === 'stream'
                 ? { output_type: 'stream', name: o.name || 'stdout', text: toLines(o.text || '') }
-                : o.kind === 'result'
-                  ? { output_type: 'execute_result', data: { 'text/plain': toLines(o.text || '') }, metadata: {}, execution_count: null }
-                  : { output_type: 'error', ename: o.ename || '', evalue: o.evalue || '', traceback: (o.traceback || '').split('\n') }
+                : o.kind === 'display'
+                  ? { output_type: 'display_data', data: { [o.mime || 'image/png']: o.data || '' }, metadata: {} }
+                  : o.kind === 'result'
+                    ? { output_type: 'execute_result', data: { 'text/plain': toLines(o.text || '') }, metadata: {}, execution_count: null }
+                    : { output_type: 'error', ename: o.ename || '', evalue: o.evalue || '', traceback: (o.traceback || '').split('\n') }
             ),
           }
     ),
@@ -236,9 +243,11 @@ export const NotebookView: React.FC<Props> = ({ content, projectId, onChange }) 
         ? { kind: 'stream', name: e.name, text: e.text }
         : e.type === 'result'
           ? { kind: 'result', text: e.text }
-          : e.type === 'error'
-            ? { kind: 'error', ename: e.ename, evalue: e.evalue, traceback: e.traceback }
-            : null;
+          : e.type === 'display'
+            ? { kind: 'display', mime: e.mime, data: e.data }
+            : e.type === 'error'
+              ? { kind: 'error', ename: e.ename, evalue: e.evalue, traceback: e.traceback }
+              : null;
     if (out) setCells((cs) => cs.map((c) => (c.id === cellId ? { ...c, outputs: [...c.outputs, out] } : c)));
   }
 
@@ -397,14 +406,18 @@ export const NotebookView: React.FC<Props> = ({ content, projectId, onChange }) 
               {/* Outputs */}
               {cell.outputs.length > 0 && (
                 <div className="border-t border-slate-800 bg-deep/60 p-2 space-y-1 font-mono text-[11.5px] select-text" data-cell-output>
-                  {cell.outputs.map((o, k) => (
-                    <pre
-                      key={k}
-                      className={`whitespace-pre-wrap break-words ${o.kind === 'error' ? 'text-rose-300' : o.name === 'stderr' ? 'text-amber-300' : o.kind === 'result' ? 'text-sky-200' : 'text-slate-200'}`}
-                    >
-                      {o.kind === 'error' ? `${o.ename}: ${o.evalue}\n${o.traceback || ''}` : o.text}
-                    </pre>
-                  ))}
+                  {cell.outputs.map((o, k) =>
+                    o.kind === 'display' ? (
+                      <img key={k} src={`data:${o.mime || 'image/png'};base64,${o.data}`} alt="" className="max-w-full rounded bg-white" data-cell-image />
+                    ) : (
+                      <pre
+                        key={k}
+                        className={`whitespace-pre-wrap break-words ${o.kind === 'error' ? 'text-rose-300' : o.name === 'stderr' ? 'text-amber-300' : o.kind === 'result' ? 'text-sky-200' : 'text-slate-200'}`}
+                      >
+                        {o.kind === 'error' ? `${o.ename}: ${o.evalue}\n${o.traceback || ''}` : o.text}
+                      </pre>
+                    )
+                  )}
                 </div>
               )}
             </div>

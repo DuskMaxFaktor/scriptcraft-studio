@@ -11,6 +11,7 @@ import sys
 import io
 import json
 import ast
+import base64
 import traceback
 
 _real_stdout = sys.stdout
@@ -58,6 +59,42 @@ def _clean_traceback(exc):
     return "".join(lines)
 
 
+def _emit_image(raw):
+    """raw: PNG bytes or an already-base64 string."""
+    data = base64.b64encode(raw).decode("ascii") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    send({"execId": _cur["id"], "type": "display", "mime": "image/png", "data": data})
+
+
+def _capture_figures():
+    """Show any open matplotlib figures inline (like Jupyter), then close them."""
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is None:
+        return
+    try:
+        for num in list(plt.get_fignums()):
+            fig = plt.figure(num)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            _emit_image(buf.getvalue())
+            plt.close(fig)
+    except Exception:
+        pass
+
+
+def _show_rich(value):
+    """If the last expression renders as an image (matplotlib figure, PIL image…), show it. Returns True if handled."""
+    repr_png = getattr(value, "_repr_png_", None)
+    if callable(repr_png):
+        try:
+            out = repr_png()
+            if out:
+                _emit_image(out)
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def run_cell(code):
     try:
         parsed = ast.parse(code, "<cell>", "exec")
@@ -75,12 +112,13 @@ def run_cell(code):
             exec(compile(parsed, "<cell>", "exec"), ns, ns)
         if last_expr is not None:
             value = eval(compile(last_expr, "<cell>", "eval"), ns, ns)
-            if value is not None:
+            if value is not None and not _show_rich(value):
                 try:
                     text = repr(value)
                 except Exception as exc:  # a broken __repr__ must not kill the kernel
                     text = f"<repr failed: {exc}>"
                 send({"execId": _cur["id"], "type": "result", "text": text})
+        _capture_figures()  # inline any plots the cell drew
         return "ok"
     except SystemExit:
         return "ok"

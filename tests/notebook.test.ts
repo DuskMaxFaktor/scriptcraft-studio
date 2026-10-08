@@ -123,3 +123,20 @@ test('kernel: state persists between cells, output streams, errors and restart c
 
   assert.equal((await api('DELETE', `/api/notebook/kernel/${kernelId}`)).status, 200);
 });
+
+test('a rich object (_repr_png_) is shown as an image, not text', { skip: !hasPython && 'python not installed' }, async () => {
+  const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const start = await api('POST', '/api/notebook/kernel/start', {});
+  const kernelId = start.data.kernelId;
+  const wait = kernelEvents(kernelId);
+  const exec = async (code: string) => wait((await api('POST', `/api/notebook/kernel/${kernelId}/exec`, { code })).data.execId);
+
+  await exec(`import base64\nclass Img:\n    def _repr_png_(self):\n        return base64.b64decode("${PNG_B64}")`);
+  const ev = await exec('Img()');
+  const img = ev.find((e) => e.type === 'display');
+  assert.equal(img?.mime, 'image/png');
+  assert.equal(img?.data, PNG_B64); // the image is emitted, not a text repr
+  assert.ok(!ev.some((e) => e.type === 'result'), 'the image replaces the text output');
+
+  await api('DELETE', `/api/notebook/kernel/${kernelId}`);
+});

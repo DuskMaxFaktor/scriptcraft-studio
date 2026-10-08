@@ -465,6 +465,27 @@ test('notebook: markdown renders and a code cell runs against a stateful kernel'
   await page.goto('about:blank');
 });
 
+test('notebook: a cell that returns an image shows it inline', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const ipynb = JSON.stringify({
+    cells: [
+      { cell_type: 'code', metadata: {}, execution_count: null, source: [`import base64\nclass Img:\n    def _repr_png_(self):\n        return base64.b64decode("${PNG}")`], outputs: [] },
+      { cell_type: 'code', metadata: {}, execution_count: null, source: ['Img()'], outputs: [] },
+    ],
+    metadata: {},
+    nbformat: 4,
+    nbformat_minor: 5,
+  });
+  const project = (await (await request.post('/api/projects', { data: { name: 'Картинка', files: [{ name: 'img.ipynb', language: 'text', content: ipynb, isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => localStorage.setItem('scriptcraft-last-project', id), project.id);
+  await page.goto('/');
+  await expect(page.locator('[data-notebook]')).toBeVisible();
+  await page.getByRole('button', { name: 'Запустить всё', exact: true }).click();
+  await expect(page.locator('[data-cell-image]')).toBeVisible({ timeout: 30_000 });
+  await page.goto('about:blank');
+});
+
 test('snippets: a prefix expands to a template with tab stops', async ({ page, request }) => {
   await openStudio(page, request, 'Сниппеты', [{ name: 'main.js', language: 'javascript', content: '', isEntry: true }]);
   const editor = page.locator('.monaco-editor').first();
