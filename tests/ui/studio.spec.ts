@@ -475,6 +475,31 @@ test('snippets: a prefix expands to a template with tab stops', async ({ page, r
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('for (const item of items)');
 });
 
+test('custom snippets: add one in the manager, then it expands in the editor', async ({ page, request }) => {
+  await openStudio(page, request, 'Свои сниппеты', [{ name: 'main.py', language: 'python', content: '', isEntry: true }]);
+
+  // Add a snippet via the manager
+  await page.locator('[data-open-snippets]').click();
+  const modal = page.locator('[data-snippets-modal]');
+  await expect(modal).toBeVisible();
+  // python is the default language
+  await modal.locator('[data-snip-add]').click();
+  await modal.locator('[data-snip-prefix]').first().fill('hola');
+  await modal.locator('[data-snip-body]').first().fill('print("hola ${1:name}")');
+  await modal.locator('[data-snip-save]').click();
+  await expect(modal).toBeHidden();
+
+  // Now the prefix expands in a Python file
+  const editor = page.locator('.monaco-editor').first();
+  await editor.click();
+  await page.keyboard.type('hola', { delay: 25 });
+  await page.keyboard.press('Control+Space');
+  const row = page.locator('.suggest-widget .monaco-list-row', { hasText: 'hola' }).first();
+  await expect(row).toBeVisible();
+  await row.click();
+  await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('print("hola name")');
+});
+
 test('emmet: an HTML abbreviation expands on Tab', async ({ page, request }) => {
   await openStudio(page, request, 'Emmet', [{ name: 'index.html', language: 'html', content: '', isEntry: true }]);
   const editor = page.locator('.monaco-editor').first();

@@ -18,6 +18,7 @@ import {
   Bug,
   Package,
   SlidersHorizontal,
+  Braces,
 } from 'lucide-react';
 import { Cpu as CpuIcon } from 'lucide-react';
 import { FileItem } from '../types.ts';
@@ -43,6 +44,7 @@ interface HeaderProps {
   onBuildExe: () => void;
   /** Environment variables and arguments of the project's programs */
   onOpenRunConfig: () => void;
+  onOpenSnippets: () => void;
   projectName: string;
   saveStatus: 'saving' | 'saved' | 'error' | 'idle';
   onOpenProjects: () => void;
@@ -63,6 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
   onExportProject,
   onBuildExe,
   onOpenRunConfig,
+  onOpenSnippets,
   projectName,
   saveStatus,
   onOpenProjects,
@@ -242,6 +245,16 @@ export const Header: React.FC<HeaderProps> = ({
           title={t('runcfg.open')}
         >
           <SlidersHorizontal className="w-4 h-4" />
+        </button>
+
+        {/* Snippets manager */}
+        <button
+          onClick={onOpenSnippets}
+          data-open-snippets
+          className="p-1.5 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-300 hover:text-fg transition-colors"
+          title={t('snip.open')}
+        >
+          <Braces className="w-4 h-4" />
         </button>
 
         {/* Debug Button */}

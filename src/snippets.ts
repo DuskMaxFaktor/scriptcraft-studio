@@ -3,10 +3,51 @@ import type * as Monaco from 'monaco-editor';
 // Code snippets: type a short prefix and pick it from the completion list (Tab/Enter) to expand a
 // template with tab stops (${1}, ${2}, …). Registered once for each language.
 
-interface Snippet {
+export interface Snippet {
   prefix: string;
   body: string;
   description: string;
+}
+
+// Languages that get snippet completions (Monaco language ids). Custom snippets may target any of them.
+export const SNIPPET_LANGUAGES = ['python', 'javascript', 'typescript', 'html', 'css', 'shell', 'sql', 'json', 'markdown', 'plaintext'];
+
+const CUSTOM_KEY = 'scriptcraft-custom-snippets';
+let custom: Record<string, Snippet[]> = loadCustom();
+
+function loadCustom(): Record<string, Snippet[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_KEY) || '{}');
+    const out: Record<string, Snippet[]> = {};
+    for (const [lang, list] of Object.entries(raw)) {
+      if (!Array.isArray(list)) continue;
+      out[lang] = list
+        .filter((s: any) => s && typeof s.prefix === 'string' && typeof s.body === 'string')
+        .map((s: any) => ({ prefix: s.prefix, body: s.body, description: typeof s.description === 'string' ? s.description : '' }));
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** The user's own snippets, by language (a copy). */
+export function getCustomSnippets(): Record<string, Snippet[]> {
+  return JSON.parse(JSON.stringify(custom));
+}
+
+/** Replace the user's own snippets and persist them; completions pick them up immediately. */
+export function setCustomSnippets(next: Record<string, Snippet[]>) {
+  custom = {};
+  for (const [lang, list] of Object.entries(next)) {
+    const clean = (list || []).filter((s) => s.prefix.trim() && s.body).map((s) => ({ prefix: s.prefix.trim(), body: s.body, description: s.description || '' }));
+    if (clean.length) custom[lang] = clean;
+  }
+  try {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(custom));
+  } catch {
+    // storage unavailable
+  }
 }
 
 const PY: Snippet[] = [
@@ -61,15 +102,16 @@ const BY_LANGUAGE: Record<string, Snippet[]> = {
 
 let registered = false;
 
-/** Register snippet completions for every supported language (once). */
+/** Register snippet completions for every supported language (once). Built-in + the user's own snippets. */
 export function registerSnippets(monaco: typeof Monaco) {
   if (registered) return;
   registered = true;
-  for (const [language, snippets] of Object.entries(BY_LANGUAGE)) {
+  for (const language of SNIPPET_LANGUAGES) {
     monaco.languages.registerCompletionItemProvider(language, {
       provideCompletionItems(model, position) {
         const word = model.getWordUntilPosition(position);
         const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
+        const snippets = [...(BY_LANGUAGE[language] || []), ...(custom[language] || [])];
         return {
           suggestions: snippets.map((s) => ({
             label: s.prefix,
