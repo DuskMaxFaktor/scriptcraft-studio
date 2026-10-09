@@ -39,6 +39,7 @@ import {
 } from '../codeTools.ts';
 import { askText } from '../dialogs.tsx';
 import { useFileCoverage } from '../coverage.ts';
+import { COMMANDS, applyEditorBindings, runStudioCommand, toMonacoKeybinding, useBindings } from '../keybindings.ts';
 
 registerInlineCompletions();
 registerCodeTools();
@@ -323,10 +324,32 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     return () => clearTimeout(timer);
   }, [reveal?.nonce, activeFile.id]);
 
+  // The user's shortcuts: studio commands become editor actions (also listed in the F1 palette),
+  // Monaco's own commands are re-bound globally
+  const studioActionsRef = useRef<{ dispose(): void }[]>([]);
+  const bindings = useBindings();
+  const registerStudioActions = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    studioActionsRef.current.forEach((d) => d.dispose());
+    studioActionsRef.current = COMMANDS.filter((c) => !c.monaco && bindings[c.id].length).map((c) =>
+      editor.addAction({
+        id: `scriptcraft.${c.id}`,
+        label: `ScriptCraft: ${t(c.label)}`,
+        keybindings: bindings[c.id].map((k) => toMonacoKeybinding(monaco, k)).filter((k): k is number => k !== null),
+        run: () => (c.id === 'run' ? onRunRef.current() : runStudioCommand(c.id)),
+      })
+    );
+  };
+  useEffect(() => {
+    registerStudioActions();
+    applyEditorBindings(monaco, bindings);
+  }, [bindings]);
+
   const handleMount: OnMount = (editor, m) => {
     editorRef.current = editor;
-    // Ctrl+Enter runs the script (Monaco would otherwise insert a line)
-    editor.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.Enter, () => onRunRef.current());
+    // Studio shortcuts (Ctrl+Enter runs...) win over Monaco's own keys while the editor has focus
+    registerStudioActions();
     // Files are autosaved; just keep the browser "Save page" dialog away
     editor.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, () => {});
     editor.onDidChangeCursorPosition((e) => setCursor({ line: e.position.lineNumber, column: e.position.column }));

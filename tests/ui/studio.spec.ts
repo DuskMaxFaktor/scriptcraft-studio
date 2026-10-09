@@ -576,6 +576,49 @@ test('tests tab: runs pytest, shows passed / failed and opens the failing test',
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('def test_bad');
 });
 
+test('keyboard shortcuts can be changed: a studio command and an editor command, kept after reload', async ({ page, request }) => {
+  const project = await openStudio(page, request, 'Клавиши', [{ name: 'app.js', language: 'javascript', content: 'const a = {b:1}\nconsole.log("ran", a.b)\n', isEntry: true }]);
+  await page.getByTitle('Горячие клавиши').click();
+  const modal = page.locator('[data-hotkeys]');
+
+  // Run on Ctrl+P: taken by "Go to file", so the window offers to move it
+  await modal.locator('[data-hotkey="run"] [data-hotkey-edit]').click();
+  await page.keyboard.press('Control+P');
+  await expect(modal.locator('[data-hotkey-conflict]')).toContainText('Перейти к файлу');
+  await modal.locator('[data-hotkey-reassign]').click();
+  await expect(modal.locator('[data-hotkey="run"]')).toContainText('Ctrl + P');
+  await expect(modal.locator('[data-hotkey="quickOpen"]')).toContainText('нет');
+
+  // Format on Ctrl+Alt+L instead of Shift+Alt+F
+  await modal.locator('[data-hotkey="format"] [data-hotkey-edit]').click();
+  await page.keyboard.press('Control+Shift+I');
+  await expect(modal.locator('[data-hotkey="format"]')).toContainText('Ctrl + Shift + I');
+  await page.keyboard.press('Escape');
+  await page.mouse.click(5, 5);
+  await expect(modal).toHaveCount(0);
+
+  // Kept after reload
+  await page.reload();
+  await expect(page.locator('.monaco-editor').first()).toBeVisible();
+  await page.locator('.monaco-editor').first().click();
+  // The old format key does nothing now
+  await page.keyboard.press('Shift+Alt+F');
+  await page.waitForTimeout(2000); // formatting + autosave would have landed by now
+  expect(await projectFile(request, project.id, 'app.js')).toBe('const a = {b:1}\nconsole.log("ran", a.b)\n');
+  await page.keyboard.press('Control+Shift+I');
+  await expect.poll(() => projectFile(request, project.id, 'app.js'), { timeout: 8000 }).toBe('const a = { b: 1 };\nconsole.log("ran", a.b);\n');
+  // Ctrl+P in the editor runs the program, the file picker stays closed
+  await page.keyboard.press('Control+P');
+  await expect(output(page)).toContainText('ran 1');
+
+  // Reset all: back to the defaults
+  await page.getByTitle('Горячие клавиши').click();
+  await modal.locator('[data-hotkeys-reset-all]').click();
+  await expect(modal.locator('[data-hotkey="run"]')).toContainText('Ctrl + Enter');
+  await expect(modal.locator('[data-hotkey="quickOpen"]')).toContainText('Ctrl + P');
+  expect(await page.evaluate(() => localStorage.getItem('scriptcraft-keybindings'))).toBeNull();
+});
+
 test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
   test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
   await openStudio(page, request, 'Покрытие', [

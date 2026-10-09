@@ -31,6 +31,7 @@ import {
 } from './utils/execution.ts';
 import { startInteractiveRun, attachRunStream, InteractiveRun, RunOutcome } from './utils/interactiveRun.ts';
 import { t, useI18n, aiLanguageInstruction, getLang } from './i18n.ts';
+import { setStudioCommandHandler, studioCommandFor, type CommandId } from './keybindings.ts';
 import { DialogHost, askConfirm, showAlert } from './dialogs.tsx';
 
 export default function App() {
@@ -596,50 +597,66 @@ export default function App() {
     else setTimeout(preload, 1500);
   }, []);
 
-  // Global keyboard shortcuts
+  // Keyboard shortcuts (the user can change them in the "Keyboard shortcuts" window)
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Debugger keys (F5 starts/continues, so the browser does not reload the page)
-      if (e.key === 'F5' && !e.ctrlKey) {
-        e.preventDefault();
-        if (e.shiftKey) {
+    const run = (id: CommandId) => {
+      switch (id) {
+        case 'run':
+        case 'runActive':
+          handleRunCode(id === 'runActive');
+          break;
+        case 'searchProject':
+          openSearch();
+          break;
+        case 'split':
+          toggleSplit();
+          break;
+        case 'git':
+          setSidebarView('git');
+          break;
+        case 'quickOpen':
+          setIsQuickOpen(true);
+          break;
+        case 'terminal':
+          setPanelCollapsed(!panelCollapsed);
+          break;
+        case 'help':
+          setIsHotkeysOpen(true);
+          break;
+        case 'debug':
+          if (debugRef.current) debugCommand('continue');
+          else handleDebug();
+          break;
+        case 'debugStop':
           if (debugRef.current) activeRun?.stop().catch(() => {});
-        } else if (debugRef.current) debugCommand('continue');
-        else handleDebug();
-        return;
-      }
-      if (debugRef.current && (e.key === 'F10' || e.key === 'F11')) {
-        e.preventDefault();
-        debugCommand(e.key === 'F10' ? 'next' : e.shiftKey ? 'out' : 'step');
-        return;
-      }
-      const mod = e.ctrlKey || e.metaKey;
-      if (!mod) return;
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        handleRunCode(e.shiftKey);
-      } else if (e.code === 'KeyF' && e.shiftKey) {
-        e.preventDefault();
-        openSearch();
-      } else if (e.code === 'Backslash' && !e.shiftKey) {
-        e.preventDefault();
-        toggleSplit();
-      } else if (e.code === 'KeyG' && e.shiftKey) {
-        e.preventDefault();
-        setSidebarView('git');
-      } else if (e.code === 'KeyP' && !e.shiftKey) {
-        e.preventDefault();
-        setIsQuickOpen(true);
-      } else if (e.code === 'Backquote') {
-        e.preventDefault();
-        setPanelCollapsed(!panelCollapsed);
-      } else if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
-        e.preventDefault();
-        setIsHotkeysOpen(true);
+          break;
+        case 'debugNext':
+        case 'debugStep':
+        case 'debugOut':
+          if (debugRef.current) debugCommand(id === 'debugNext' ? 'next' : id === 'debugStep' ? 'step' : 'out');
+          break;
       }
     };
+    setStudioCommandHandler(run);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // While a shortcut is being recorded, the key belongs to that window
+      if ((e.target as HTMLElement | null)?.closest?.('[data-keybinding-recorder]')) return;
+      const id = studioCommandFor(e);
+      if (!id) {
+        // F5 never reloads the page
+        if (e.key === 'F5') e.preventDefault();
+        return;
+      }
+      // Debug stepping keys are free for other uses while nothing is being debugged
+      if ((id === 'debugNext' || id === 'debugStep' || id === 'debugOut') && !debugRef.current) return;
+      e.preventDefault();
+      run(id);
+    };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      setStudioCommandHandler(null);
+    };
   }, [handleRunCode, panelCollapsed, handleDebug, debugUi, activeRun]);
 
   // ---------- Projects (stored on disk under projects/, autosaved) ----------
