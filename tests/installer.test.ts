@@ -30,16 +30,23 @@ const regValue = (name: string) => {
   const r = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf-8', windowsHide: true });
   return r.status === 0 ? r.stdout : null;
 };
-async function waitFor(check: () => boolean, ms = 30000) {
+// The uninstaller continues from a fresh copy in TEMP, which an antivirus may scan for a while
+async function waitFor(check: () => boolean, ms = 60000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (check()) return;
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error('timed out');
+  let log = '';
+  try {
+    log = fs.readFileSync(path.join(os.tmpdir(), 'ScriptCraftSetup.log'), 'utf-8').split('\n').slice(-15).join('\n');
+  } catch {
+    /* no log */
+  }
+  throw new Error(`timed out; installer log:\n${log}`);
 }
 
-test('installer: installs, updates over user data, uninstalls', { skip, timeout: 180_000 }, async () => {
+test('installer: installs, updates over user data, uninstalls', { skip, timeout: 300_000 }, async () => {
   // Package: what make_portable.ps1 zips (one top folder)
   const pkg = path.join(tmp, 'pkg', 'ScriptCraftStudio');
   write(path.join(pkg, 'api', 'new.txt'), 'v2');

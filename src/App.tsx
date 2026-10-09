@@ -9,7 +9,7 @@ import { stripAnsi } from './utils/ansi.tsx';
 import type { DebugUiState } from './components/DebugPanel.tsx';
 import { startDebugSession, debuggableLanguage, type Breakpoints, type Breakpoint, type DebugSessionHandle, type DebugCommand } from './utils/debugClient.ts';
 import { getSelectedModelId } from './utils/models.ts';
-import {
+import { changedPayload,
   projectsApi,
   filesToPayload,
   payloadToFiles,
@@ -54,6 +54,8 @@ export default function App() {
   const [splitWidth, setSplitWidth] = usePersistentSize('scriptcraft-split-width', 520);
   const [isHotkeysOpen, setIsHotkeysOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+  /** name -> content the server has for the open project (what an autosave can leave out) */
+  const savedContentRef = useRef<Map<string, string>>(new Map());
   const [aboutTab, setAboutTab] = useState<'help' | 'updates' | 'report' | 'legal'>('updates');
   const openAbout = (tab: 'help' | 'updates' | 'report' | 'legal') => {
     setAboutTab(tab);
@@ -680,6 +682,7 @@ export default function App() {
   const openProjectData = useCallback((data: ProjectData, focusName?: string) => {
     const loaded = payloadToFiles(data.files);
     skipNextSaveRef.current = true;
+    savedContentRef.current = new Map(data.files.map((f) => [f.name, f.content]));
     currentProjectRef.current = { id: data.id, name: data.name };
     setCurrentProject({ id: data.id, name: data.name });
     setFiles(loaded);
@@ -865,13 +868,16 @@ export default function App() {
       return;
     }
     setSaveStatus('saving');
-    const payload = filesToPayload(files);
+    const saving = files;
     const doSave = async () => {
       if (pendingSaveRef.current === doSave) pendingSaveRef.current = null;
       try {
         const snapshot = forceSnapshotRef.current;
         forceSnapshotRef.current = false;
+        // Built when the save starts: an earlier save that finished meanwhile already updated the map
+        const payload = changedPayload(saving, savedContentRef.current);
         await projectsApi.save(project.id, { files: payload, ...(snapshot ? { snapshot: true } : {}) });
+        if (currentProjectRef.current?.id === project.id) savedContentRef.current = new Map(saving.map((f) => [f.name, f.content]));
         if (!pendingSaveRef.current) setSaveStatus('saved');
         setPreviewVersion((v) => v + 1);
       } catch (err) {
@@ -917,6 +923,7 @@ export default function App() {
       if (!changed) return;
       const merged = [...next, ...added];
       skipNextSaveRef.current = true; // this is the disk's content already
+      savedContentRef.current = new Map(data.files.map((f) => [f.name, f.content]));
       filesRef.current = merged;
       setFiles(merged);
       if (!merged.some((f) => f.id === activeFileId)) setActiveFileId(merged[0]?.id || '');
@@ -955,7 +962,7 @@ export default function App() {
       fetch(`/api/projects/${encodeURIComponent(project.id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: filesToPayload(filesRef.current) }),
+        body: JSON.stringify({ files: changedPayload(filesRef.current, savedContentRef.current) }),
         keepalive: true,
       });
     };

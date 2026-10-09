@@ -128,6 +128,51 @@ test('projects: version history keeps old and deleted content', async () => {
   await api('DELETE', `/api/projects/${p.id}`);
 });
 
+test('projects: a save may leave out unchanged contents; unchanged files are not rewritten', async () => {
+  const p = (
+    await api('POST', '/api/projects', {
+      name: 'delta',
+      files: [
+        { name: 'a.py', content: 'A', isEntry: true },
+        { name: 'b.py', content: 'B' },
+        { name: 'gone.py', content: 'G' },
+      ],
+    })
+  ).data;
+  const dir = path.join(tmp, 'projects', p.id);
+  const bTime = fs.statSync(path.join(dir, 'b.py')).mtimeMs;
+  await new Promise((r) => setTimeout(r, 30));
+  // a.py edited; b.py without content = keep; gone.py left out = deleted; c.py new; main file moves to b.py
+  const r = await api('PUT', `/api/projects/${p.id}`, {
+    files: [
+      { name: 'a.py', language: 'python', content: 'A2' },
+      { name: 'b.py', language: 'python', isEntry: true },
+      { name: 'c.py', language: 'python', content: 'C' },
+    ],
+  });
+  assert.equal(r.status, 200);
+  const data = (await api('GET', `/api/projects/${p.id}`)).data;
+  assert.deepEqual(
+    data.files.map((f: any) => [f.name, f.content, !!f.isEntry]),
+    [
+      ['a.py', 'A2', false],
+      ['b.py', 'B', true],
+      ['c.py', 'C', false],
+    ]
+  );
+  assert.equal(fs.statSync(path.join(dir, 'b.py')).mtimeMs, bTime, 'b.py was not written again');
+  // Same content sent again: no write either
+  const aTime = fs.statSync(path.join(dir, 'a.py')).mtimeMs;
+  await new Promise((r) => setTimeout(r, 30));
+  await api('PUT', `/api/projects/${p.id}`, { files: [{ name: 'a.py', content: 'A2' }, { name: 'b.py', isEntry: true }, { name: 'c.py', content: 'C' }] });
+  assert.equal(fs.statSync(path.join(dir, 'a.py')).mtimeMs, aTime);
+  // A file deleted on disk and sent without content drops out instead of coming back empty
+  fs.rmSync(path.join(dir, 'c.py'));
+  await api('PUT', `/api/projects/${p.id}`, { files: [{ name: 'a.py' }, { name: 'b.py', isEntry: true }, { name: 'c.py' }] });
+  assert.deepEqual((await api('GET', `/api/projects/${p.id}`)).data.files.map((f: any) => f.name), ['a.py', 'b.py']);
+  await api('DELETE', `/api/projects/${p.id}`);
+});
+
 test('projects: chat history is stored per project', async () => {
   const p = (await api('POST', '/api/projects', { name: 'chat', files: [] })).data;
   assert.deepEqual((await api('GET', `/api/projects/${p.id}/chat`)).data.messages, []);

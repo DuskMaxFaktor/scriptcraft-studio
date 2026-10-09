@@ -98,6 +98,20 @@ const ASSET_ICONS: Record<ProjectAsset['kind'], React.FC<{ className?: string }>
   other: File,
 };
 
+// Line counts per file object: a keystroke replaces only the edited file's object, so a big project
+// is not split into lines again on every key press
+const lineCounts = new WeakMap<FileItem, number>();
+const BIG_PROJECT_FILES = 300;
+function linesOf(f: FileItem): number {
+  let n = lineCounts.get(f);
+  if (n === undefined) {
+    n = 1;
+    for (let i = f.content.indexOf('\n'); i !== -1; i = f.content.indexOf('\n', i + 1)) n++;
+    lineCounts.set(f, n);
+  }
+  return n;
+}
+
 export const Sidebar: React.FC<SidebarProps> = ({
   files,
   activeFileId,
@@ -124,10 +138,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [newFileName, setNewFileName] = useState('');
   const [editingFileId, setEditingFileId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+  /** Folders the user toggled: closed ones in a normal project, opened ones in a big one */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [isDragOver, setIsDragOver] = useState(false);
 
-  const tree = useMemo(() => buildTree(files), [files]);
+  // Rebuilt when files are added, renamed, deleted or the main file changes — not on every keystroke
+  const structureKey = files.map((f) => `${f.id}\u0000${f.name}\u0000${f.language}\u0000${f.isEntry ? 1 : 0}`).join('\n');
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const tree = useMemo(() => buildTree(filesRef.current), [structureKey]);
 
   const handleStartCreate = () => {
     setIsCreating(true);
@@ -154,10 +173,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleConfirmRename = () => {
     const trimmed = editingName.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     if (editingFileId && trimmed) {
-      onRenameFile(editingFileId, trimmed);
+      live.current.onRenameFile(editingFileId, trimmed);
     }
     setEditingFileId(null);
   };
+
+  // Rows call the latest handlers through a ref: the drawn tree can then be reused while the user types
+  const live = useRef({ onSelectFile, onToggleEntry, onOpenHistory, onDeleteFile, onDeleteFolder, onRenameFile });
+  live.current = { onSelectFile, onToggleEntry, onOpenHistory, onDeleteFile, onDeleteFolder, onRenameFile };
 
   const toggleFolder = (path: string) =>
     setCollapsed((prev) => {
@@ -203,7 +226,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return (
       <div
         key={file.id}
-        onClick={() => onSelectFile(file.id)}
+        onClick={() => live.current.onSelectFile(file.id)}
         title={file.name}
         style={{ paddingLeft: 12 + depth * 14 }}
         className={`group flex items-center justify-between pr-3 py-1.5 text-xs cursor-pointer border-l-2 transition-colors ${
@@ -241,7 +264,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onToggleEntry(file.id);
+                live.current.onToggleEntry(file.id);
               }}
               className={`p-0.5 ${file.isEntry ? 'text-amber-400' : 'text-slate-400 hover:text-amber-400'}`}
               title={file.isEntry ? t('sidebar.unsetEntry') : t('sidebar.setEntry')}
@@ -251,7 +274,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onOpenHistory(file.name);
+                live.current.onOpenHistory(file.name);
               }}
               className="p-0.5 text-slate-400 hover:text-slate-200"
               title={t('sidebar.history')}
@@ -268,7 +291,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onDeleteFile(file.id);
+                live.current.onDeleteFile(file.id);
               }}
               className="p-0.5 text-slate-400 hover:text-red-400"
               title={t('sidebar.delete')}
@@ -282,7 +305,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const renderFolder = (folder: FolderNode, depth: number): React.ReactNode => {
-    const isCollapsed = collapsed.has(folder.path);
+    // Big projects start with folders closed (thousands of rows slow every keystroke down);
+    // the folders of the open file are always shown
+    const isCollapsed = bigProject ? !collapsed.has(folder.path) && !activeFolders.has(folder.path) : collapsed.has(folder.path);
     return (
       <div key={`dir:${folder.path}`}>
         <div
@@ -311,7 +336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={(e) => {
                   e.stopPropagation();
                   void askConfirm(t('sidebar.confirmDeleteFolder', { name: folder.path, count: countFiles(folder) }), { danger: true }).then(
-                    (ok) => ok && onDeleteFolder(folder.path)
+                    (ok) => ok && live.current.onDeleteFolder(folder.path)
                   );
                 }}
                 className="p-0.5 text-slate-400 hover:text-red-400"
@@ -332,7 +357,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
-  const totalLines = files.reduce((acc, f) => acc + f.content.split('\n').length, 0);
+  const totalLines = files.reduce((acc, f) => acc + linesOf(f), 0);
+  const bigProject = files.length > BIG_PROJECT_FILES;
+  const activeName = files.find((f) => f.id === activeFileId)?.name || '';
+  const activeFolders = new Set(activeName.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, i + 1).join('/')));
+  // 2000 rows are not drawn again on every keystroke: only when the tree, the selection, a rename or a folder changes
+  const treeView = useMemo(
+    () => (
+      <>
+        {tree.folders.map((f) => renderFolder(f, 0))}
+        {tree.files.map((f) => renderFile(f, 0))}
+      </>
+    ),
+    [tree, activeFileId, editingFileId, editingName, collapsed, t, bigProject]
+  );
 
   return (
     <aside
@@ -460,8 +498,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* File Tree */}
         <div className="py-1 overflow-y-auto min-h-0">
-          {tree.folders.map((f) => renderFolder(f, 0))}
-          {tree.files.map((f) => renderFile(f, 0))}
+          {treeView}
           {assets.length > 0 && (
             <div className="mt-2 border-t border-slate-800/80 pt-1" data-assets>
               <button

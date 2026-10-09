@@ -17,6 +17,21 @@ export interface ProjectFilePayload {
   isEntry?: boolean;
 }
 
+/** A file in a save request: without content when it is unchanged since the last save. */
+export type SavePayload = Omit<ProjectFilePayload, 'content'> & { content?: string };
+
+/**
+ * Only edited files carry their content (a big project would otherwise send megabytes on every pause
+ * in typing, and a save on window close is limited to 64 KB). `saved`: name -> content the server has.
+ */
+export function changedPayload(files: FileItem[], saved: Map<string, string>): SavePayload[] {
+  return files.map((f) =>
+    saved.get(f.name) === f.content
+      ? { name: f.name, language: f.language, isEntry: f.isEntry }
+      : { name: f.name, language: f.language, content: f.content, isEntry: f.isEntry }
+  );
+}
+
 export interface ProjectData {
   id: string;
   name: string;
@@ -40,7 +55,7 @@ export const projectsApi = {
   get: (id: string, rescan = false) => request<ProjectData>(`/api/projects/${encodeURIComponent(id)}${rescan ? '?rescan=1' : ''}`),
   create: (name: string, files: ProjectFilePayload[]) =>
     request<ProjectData>('/api/projects', { method: 'POST', body: JSON.stringify({ name, files }) }),
-  save: (id: string, body: { name?: string; files?: ProjectFilePayload[] }) =>
+  save: (id: string, body: { name?: string; files?: SavePayload[]; snapshot?: boolean }) =>
     request<{ ok: boolean; updatedAt: number; name: string }>(`/api/projects/${encodeURIComponent(id)}`, {
       method: 'PUT',
       body: JSON.stringify(body),

@@ -40,7 +40,8 @@ interface ProjectMeta {
 interface IncomingFile {
   name: string;
   language?: string;
-  content: string;
+  /** Omitted: unchanged since the last save */
+  content?: string;
   isEntry?: boolean;
 }
 
@@ -209,9 +210,16 @@ function rescanProject(id: string) {
 function loadProject(id: string) {
   const meta = readMeta(id);
   const dir = projectDir(id);
-  const files = meta.files
-    .filter((f) => !isServiceFile(f.name) && fs.existsSync(path.join(dir, f.name)))
-    .map((f) => ({ ...f, content: fs.readFileSync(path.join(dir, f.name), 'utf-8') }));
+  // One read per file (no separate "exists?" check: each file access is costly on Windows with an antivirus)
+  const files: (ProjectFileMeta & { content: string })[] = [];
+  for (const f of meta.files) {
+    if (isServiceFile(f.name)) continue;
+    try {
+      files.push({ ...f, content: fs.readFileSync(path.join(dir, f.name), 'utf-8') });
+    } catch {
+      // deleted outside the studio
+    }
+  }
   return { ...meta, files };
 }
 
@@ -268,17 +276,29 @@ function saveFiles(meta: ProjectMeta, incoming: unknown, forceSnapshot = false):
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw new HttpError(400, `Duplicate file name: ${name}`);
     seen.add(lower);
+    const target = path.join(dir, name);
+    const entry = { name, language: String(raw.language || 'javascript'), isEntry: !!raw.isEntry };
+    // No content: the studio saved this file before and it did not change since — keep it as it is on disk
+    // (big projects: an autosave sends only the edited files). Gone from the disk meanwhile: drop it.
+    if (raw.content === undefined) {
+      if (fs.existsSync(target)) result.push(entry);
+      continue;
+    }
     const content = typeof raw.content === 'string' ? raw.content : '';
     if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_BYTES) throw new HttpError(400, `File too large: ${name}`);
-    const target = path.join(dir, name);
     if (fs.existsSync(target)) {
       const previous = fs.readFileSync(target, 'utf-8');
-      if (previous !== content) snapshot(dir, name, previous, forceSnapshot);
+      if (previous === content) {
+        // Unchanged: no write (no disk churn, no "changed on disk" event, file time stays)
+        result.push(entry);
+        continue;
+      }
+      snapshot(dir, name, previous, forceSnapshot);
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     markWritten(target, content);
     fs.writeFileSync(target, content, 'utf-8');
-    result.push({ name, language: String(raw.language || 'javascript'), isEntry: !!raw.isEntry });
+    result.push(entry);
   }
 
   // Only delete files this project tracked before — never arbitrary files the user put in the folder
