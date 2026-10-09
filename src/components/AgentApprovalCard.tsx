@@ -5,6 +5,7 @@ import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
 import { detectLanguageFromName } from '../utils/presets.ts';
 import { lineDiffStats, type AgentApproval, type AgentApprovalRequest } from '../utils/agent.ts';
+import { describeRisks } from '../utils/riskPrompt.ts';
 import '../monacoSetup.ts';
 
 const MONACO_LANGUAGE: Record<string, string> = { bash: 'shell' };
@@ -67,10 +68,18 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
           ))}
         </div>
       ) : request.kind === 'run' ? (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800">
-          <Play className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="font-mono text-fg">{request.path}</span>
-          <span className="text-slate-500">{t('approve.runNote')}</span>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800">
+            <Play className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="font-mono text-fg">{request.path}</span>
+            <span className="text-slate-500">{t('approve.runNote')}</span>
+          </div>
+          {!!request.risks?.length && (
+            <div className="p-2 rounded border border-rose-500/50 bg-rose-500/10 text-rose-200 space-y-1" data-agent-risks>
+              <div className="font-semibold">{t('risk.agentTitle')}</div>
+              <pre className="whitespace-pre-wrap font-sans">{describeRisks(request.risks)}</pre>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-1">
@@ -100,6 +109,7 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
           <Check className="w-3.5 h-3.5" />
           {request.kind === 'files' ? t('approve.apply') : request.kind === 'run' ? t('approve.run') : t('approve.install')}
         </button>
+        {!(request.kind === 'run' && request.risks?.length) && (
         <button
           onClick={() => onAnswer('all')}
           className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-200"
@@ -108,6 +118,7 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
           <CheckCheck className="w-3.5 h-3.5" />
           {t('approve.all')}
         </button>
+        )}
         <button
           onClick={() => onAnswer('no')}
           className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-panel hover:bg-hover border border-slate-700 text-rose-300"

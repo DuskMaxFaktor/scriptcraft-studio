@@ -2,6 +2,7 @@ import { FileItem, LogEntry } from '../types.ts';
 import { detectLanguageFromName } from './presets.ts';
 import { executeSQL } from './execution.ts';
 import { getLang, t } from '../i18n.ts';
+import { findRisks, type Risk } from './codeSafety.ts';
 
 export interface AgentFile {
   name: string;
@@ -168,7 +169,7 @@ async function installPackages(
 /** What the agent wants to do and needs the user's approval for. */
 export type AgentApprovalRequest =
   | { kind: 'files'; changes: { path: string; oldContent: string | null; newContent: string }[] }
-  | { kind: 'run'; path: string }
+  | { kind: 'run'; path: string; risks?: Risk[] }
   | { kind: 'install'; python: string[]; node: string[] };
 
 /** 'yes' = this action, 'all' = this and every following action of the current task, 'no' = stop. */
@@ -362,7 +363,11 @@ export async function runAgent(opts: {
       }
 
       if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
-      if (!(await ask({ kind: 'run', path: step.run }))) return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
+      // Risky code (deletes folders, edits the registry, downloads and runs...) is always asked about,
+      // even after "allow all"
+      const risks = findRisks(files.find((f) => f.name === step.run)?.content || '');
+      const allowed = risks.length && opts.confirm ? (await opts.confirm({ kind: 'run', path: step.run, risks })) !== 'no' : await ask({ kind: 'run', path: step.run });
+      if (!allowed) return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
       if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
       const report = await runProjectFile(step.run, files, opts.signal, opts.projectId);
       opts.onEvent({ kind: 'run', path: step.run, report });

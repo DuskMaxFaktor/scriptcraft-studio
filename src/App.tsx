@@ -33,6 +33,7 @@ import { startInteractiveRun, attachRunStream, InteractiveRun, RunOutcome } from
 import { t, useI18n, aiLanguageInstruction, getLang } from './i18n.ts';
 import { setStudioCommandHandler, studioCommandFor, type CommandId } from './keybindings.ts';
 import { DialogHost, askConfirm, showAlert } from './dialogs.tsx';
+import { confirmRiskyRun } from './utils/riskPrompt.ts';
 
 export default function App() {
   useI18n();
@@ -297,6 +298,7 @@ export default function App() {
     if (debugRef.current) return;
     const file = entryFile || activeFile;
     if (!file || isRunning) return;
+    if (!(await confirmRiskyRun(file.content, file.name))) return;
     const language = debuggableLanguage(file.name);
     if (!language) {
       addLog({ id: generateId(), type: 'warn', message: t('debug.unsupported'), timestamp: getTimestamp() });
@@ -367,6 +369,8 @@ export default function App() {
   const handleRunCode = useCallback(async (runActive = false) => {
     const file = (runActive ? activeFile : entryFile || activeFile) || null;
     if (!file || isRunning) return;
+    // Code that deletes folders, edits the registry, downloads and runs things...: one more question
+    if (!(await confirmRiskyRun(file.content, file.name))) return;
     setIsRunning(true);
     setPanelCollapsed(false);
     setTables([]);

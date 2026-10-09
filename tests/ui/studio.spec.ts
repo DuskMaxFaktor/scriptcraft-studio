@@ -673,6 +673,29 @@ test('report a problem: an interface error reaches the journal and the report', 
   expect(text).toMatch(/ScriptCraft Studio \d+\.\d+\.\d+/);
 });
 
+test('risky code: a warning before the run, Cancel keeps it from running, the answer is remembered', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  // A folder that does not exist: even if it ran, nothing would be deleted
+  await openStudio(page, request, 'Опасный код', [
+    { name: 'clean.py', content: 'import shutil\nprint("start")\nshutil.rmtree("no_such_folder_4711", ignore_errors=True)\nprint("finished")\n', isEntry: true },
+  ]);
+  const dialog = page.locator('[data-dialog="confirm"]');
+  await runButton(page).click();
+  await expect(dialog).toContainText('удаляет папки целиком');
+  await expect(dialog).toContainText('строка 3');
+  await page.locator('[data-dialog-cancel]').click();
+  await page.waitForTimeout(800);
+  await expect(output(page)).not.toContainText('start');
+
+  await runButton(page).click();
+  await page.locator('[data-dialog-ok]').click();
+  await expect(output(page)).toContainText('finished', { timeout: 20000 });
+  // Same code again: no question
+  await runButton(page).click();
+  await expect(output(page).getByText('finished')).toHaveCount(2, { timeout: 20000 });
+  await expect(dialog).toHaveCount(0);
+});
+
 test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
   test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
   await openStudio(page, request, 'Покрытие', [
