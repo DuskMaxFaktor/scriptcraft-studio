@@ -655,6 +655,24 @@ test('about window: a new version is found, the header shows a dot, the update s
   expect(installCalls).toBe(1);
 });
 
+test('report a problem: an interface error reaches the journal and the report', async ({ page, request }) => {
+  await openStudio(page, request, 'Отчёт', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  // An error somewhere in the interface
+  await page.evaluate(() => setTimeout(() => {
+    throw new Error('ui test boom 4711');
+  }));
+  await page.locator('[data-open-about]').click();
+  await page.locator('[data-about-tab="report"]').click();
+  await page.locator('[data-report-description]').fill('Кнопка не нажимается');
+  await expect.poll(async () => {
+    await page.locator('[data-report-build]').click();
+    return page.locator('[data-report-text]').inputValue();
+  }, { timeout: 10000 }).toContain('ui test boom 4711');
+  const text = await page.locator('[data-report-text]').inputValue();
+  expect(text).toContain('Кнопка не нажимается');
+  expect(text).toMatch(/ScriptCraft Studio \d+\.\d+\.\d+/);
+});
+
 test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
   test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
   await openStudio(page, request, 'Покрытие', [

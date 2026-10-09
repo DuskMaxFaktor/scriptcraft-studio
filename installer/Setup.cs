@@ -35,7 +35,7 @@ namespace ScriptCraftSetup {
         const string UninstallRoot = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\ScriptCraftStudio";
         // Folders and files of the program itself; replaced on update. Everything else in the folder is the user's.
         static readonly string[] AppDirs = { "api", "dist", "electron", "node_modules", "runtime", "public", "scripts", "src", "tests" };
-        static readonly string[] UserData = { "projects", "settings.json", ".env", "studio.log", "tools" };
+        static readonly string[] UserData = { "projects", "settings.json", ".env", "studio.log", "tools", "logs" };
 
         static bool silent, launch, uninstall, deleteData, noShortcuts;
         static string installDir, regKey = UninstallRoot, shortcutDir;

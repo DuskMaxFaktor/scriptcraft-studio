@@ -5,8 +5,11 @@ import dotenv from 'dotenv';
 import { apiRouter } from './api/router.ts';
 import { startPreviewServer } from './api/preview.ts';
 import { startBackupScheduler } from './api/backups.ts';
+import { installServerErrorLog } from './api/logs.ts';
 
 dotenv.config();
+// Errors and crashes also go to logs/errors.log (for "Report a problem")
+installServerErrorLog();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);

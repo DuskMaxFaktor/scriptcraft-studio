@@ -22,6 +22,7 @@ import { terminalRouter } from './terminal.ts';
 import { debugRouter } from './debug.ts';
 import { getPreviewPort } from './preview.ts';
 import { updateRouter } from './update.ts';
+import { logsRouter } from './logs.ts';
 
 export const apiRouter = Router();
 
@@ -30,6 +31,7 @@ apiRouter.use(localOnlyGuard);
 
 apiRouter.use('/settings', settingsRouter);
 apiRouter.use('/update', updateRouter);
+apiRouter.use('/logs', logsRouter);
 apiRouter.use('/terminal', terminalRouter);
 apiRouter.use('/debug', debugRouter);
 apiRouter.use('/projects/:id/packages', packagesRouter);
@@ -224,7 +226,7 @@ apiRouter.get('/download-full-project', async (req, res) => {
     function addFilesRecursively(currentDir: string, relPrefix = '') {
       const entries = fs.readdirSync(currentDir);
       for (const entry of entries) {
-        if (['node_modules', '.git', 'dist', '.bun', '.vscode', '.env', '.env.local', 'studio.log', 'projects', 'settings.json', 'build-cache', 'portable', 'runtime', 'test-results', 'playwright-report', 'tools'].includes(entry)) continue;
+        if (['node_modules', '.git', 'dist', '.bun', '.vscode', '.env', '.env.local', 'studio.log', 'logs', '.installed', 'projects', 'settings.json', 'build-cache', 'portable', 'runtime', 'test-results', 'playwright-report', 'tools'].includes(entry)) continue;
         const fullPath = path.join(currentDir, entry);
         const relPath = relPrefix ? `${relPrefix}/${entry}` : entry;
         const stat = fs.statSync(fullPath);

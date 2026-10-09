@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Info, X, RefreshCw, Download, ExternalLink, Loader2, CheckCircle2 } from 'lucide-react';
+import { Info, X, RefreshCw, Download, ExternalLink, Loader2, CheckCircle2, Copy, Save, FolderOpen, MessageSquareWarning } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import { checkForUpdates, useUpdateInfo } from '../updates.ts';
 import { askConfirm } from '../dialogs.tsx';
 
-// "About ScriptCraft Studio": version and updates.
+// "About ScriptCraft Studio": version and updates, reporting a problem.
+
+type Tab = 'updates' | 'report';
 
 interface Status {
   version: string;
@@ -13,8 +15,12 @@ interface Status {
   autoCheck: boolean;
 }
 
-export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initialTab?: Tab }> = ({ isOpen, onClose, initialTab = 'updates' }) => {
   const { t } = useI18n();
+  const [tab, setTab] = useState<Tab>(initialTab);
+  useEffect(() => {
+    if (isOpen) setTab(initialTab);
+  }, [isOpen, initialTab]);
   const info = useUpdateInfo();
   const [status, setStatus] = useState<Status | null>(null);
   const [repo, setRepo] = useState('');
@@ -109,8 +115,23 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
             </div>
           </div>
 
+          <div className="flex gap-1 border-b border-slate-800">
+            {(['updates', 'report'] as Tab[]).map((id) => (
+              <button
+                key={id}
+                onClick={() => setTab(id)}
+                className={`px-3 py-1.5 -mb-px border-b-2 font-semibold ${tab === id ? 'border-indigo-500 text-fg' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+                data-about-tab={id}
+              >
+                {t(`about.tab.${id}`)}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'report' && <ReportSection repo={status?.repo || ''} />}
+
+          {tab === 'updates' && (
           <section className="space-y-2">
-            <div className="font-semibold text-slate-200">{t('about.updates')}</div>
             <label className="block text-slate-400">{t('about.repo')}</label>
             <div className="flex gap-2">
               <input className={input} value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/scriptcraft-studio" data-update-repo />
@@ -156,8 +177,99 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({
               </div>
             )}
           </section>
+          )}
         </div>
       </div>
     </div>
+  );
+};
+
+/** "Report a problem": a report without secrets to copy, save or attach to a GitHub issue. */
+const ReportSection: React.FC<{ repo: string }> = ({ repo }) => {
+  const { t, lang } = useI18n();
+  const [description, setDescription] = useState('');
+  const [report, setReport] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const build = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/logs/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description, ui: { language: lang, screen: `${screen.width}x${screen.height}`, userAgent: navigator.userAgent } }),
+      });
+      setReport((await res.json()).report || '');
+      setCopied(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(report);
+    setCopied(true);
+  };
+
+  const save = () => {
+    const blob = new Blob([report], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `scriptcraft-report-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // The issue gets the description and system info; the full report is attached by the user (URLs are short)
+  const issueUrl = () => {
+    const system = report.split('## ')[2] || '';
+    const body = `${description.trim()}\n\n## ${system.trim()}\n\n${t('report.attachHint')}`;
+    const title = description.trim().split('\n')[0].slice(0, 80) || 'Problem';
+    return `https://github.com/${repo}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body.slice(0, 6000))}`;
+  };
+
+  const btn = 'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-40';
+  return (
+    <section className="space-y-2" data-report>
+      <p className="text-slate-400">{t('report.intro')}</p>
+      <textarea
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder={t('report.placeholder')}
+        rows={4}
+        className="w-full px-2 py-1.5 rounded bg-panel border border-slate-700 text-xs text-fg outline-none focus:border-indigo-500 resize-y"
+        data-report-description
+      />
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={build} disabled={busy} className={`${btn} bg-indigo-600 hover:bg-indigo-500 text-white`} data-report-build>
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MessageSquareWarning className="w-3.5 h-3.5" />}
+          {t('report.build')}
+        </button>
+        <button onClick={() => fetch('/api/logs/open-folder', { method: 'POST' })} className={`${btn} bg-slate-700 hover:bg-slate-600 text-white`}>
+          <FolderOpen className="w-3.5 h-3.5" /> {t('report.openLogs')}
+        </button>
+      </div>
+      {report && (
+        <>
+          <div className="text-slate-500">{t('report.checked')}</div>
+          <textarea readOnly value={report} rows={10} className="w-full px-2 py-1.5 rounded bg-canvas border border-slate-800 font-mono text-[11px] text-slate-300" data-report-text />
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={copy} className={`${btn} bg-slate-700 hover:bg-slate-600 text-white`} data-report-copy>
+              <Copy className="w-3.5 h-3.5" /> {copied ? t('report.copied') : t('report.copy')}
+            </button>
+            <button onClick={save} className={`${btn} bg-slate-700 hover:bg-slate-600 text-white`}>
+              <Save className="w-3.5 h-3.5" /> {t('report.save')}
+            </button>
+            {repo && (
+              <a href={issueUrl()} target="_blank" rel="noreferrer" className={`${btn} bg-slate-700 hover:bg-slate-600 text-white`} data-report-issue>
+                <ExternalLink className="w-3.5 h-3.5" /> {t('report.issue')}
+              </a>
+            )}
+          </div>
+        </>
+      )}
+    </section>
   );
 };
