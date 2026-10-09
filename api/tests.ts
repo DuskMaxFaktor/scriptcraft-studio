@@ -37,6 +37,22 @@ export interface TestReport {
   cases: TestCase[];
   /** The run itself failed (no report): e.g. a syntax error in a test file */
   error?: string;
+  /** Line coverage of the project's own (non-test) files, when asked for */
+  coverage?: CoverageReport;
+}
+
+export interface FileCoverage {
+  covered: number[];
+  missing: number[];
+}
+
+export interface CoverageReport {
+  /** project-relative path -> lines that ran / did not run */
+  files: Record<string, FileCoverage>;
+  /** 0..100 over all listed files */
+  percent: number;
+  /** Files that ran but whose lines cannot be measured reliably (TypeScript under node --test) */
+  notMeasured?: string[];
 }
 
 class TestError extends Error {
@@ -155,6 +171,73 @@ export function parseJunit(xml: string, framework: 'pytest' | 'node', dir: strin
   };
 }
 
+// ---------- coverage ----------
+const COVER_PLUGIN_DIR = path.join(STUDIO_ROOT, 'api', 'python', 'cover');
+const isTestFile = (rel: string) => PY_TEST.test(rel) || JS_TEST.test(rel) || /(^|\/)conftest\.py$/.test(rel);
+
+function withPercent(files: Record<string, FileCoverage>): CoverageReport {
+  let covered = 0;
+  let all = 0;
+  for (const f of Object.values(files)) {
+    covered += f.covered.length;
+    all += f.covered.length + f.missing.length;
+  }
+  return { files, percent: all ? Math.round((covered / all) * 1000) / 10 : 0 };
+}
+
+/** The pytest plugin's JSON (api/python/cover/sc_cover.py). */
+export function parsePythonCoverage(json: string): CoverageReport {
+  const data = JSON.parse(json) as { files: Record<string, FileCoverage> };
+  return withPercent(data.files || {});
+}
+
+/**
+ * `node --test --experimental-test-coverage` lcov. Node reports every line of a loaded file, blank lines and
+ * comments too; those are dropped so only code lines count. Test files and packages are left out.
+ */
+export function parseLcov(lcov: string, dir: string): CoverageReport {
+  const files: Record<string, FileCoverage> = {};
+  const notMeasured: string[] = [];
+  const norm = path.resolve(dir).replace(/\\/g, '/').toLowerCase();
+  for (const block of lcov.split('end_of_record')) {
+    const sf = /^SF:(.+)$/m.exec(block);
+    if (!sf) continue;
+    let rel = sf[1].trim().replace(/\\/g, '/');
+    if (/^[A-Za-z]:\//.test(rel) || rel.startsWith('/')) {
+      if (!rel.toLowerCase().startsWith(norm + '/')) continue;
+      rel = rel.slice(norm.length + 1);
+    }
+    if (rel.startsWith('..') || /(^|\/)(node_modules|\.packages)\//.test(rel) || isTestFile(rel)) continue;
+    // Node maps TypeScript (compiled by tsx) back to whole functions, not lines: an unrun `return` inside a
+    // function that ran shows as run. Better not measured than painted green wrongly.
+    if (/\.[mc]?tsx?$/.test(rel)) {
+      notMeasured.push(rel);
+      continue;
+    }
+    let source: string[] = [];
+    try {
+      source = fs.readFileSync(path.join(dir, rel), 'utf-8').split(/\r?\n/);
+    } catch {
+      /* the file is gone: keep every reported line */
+    }
+    const code = (line: number) => {
+      if (!source.length) return true;
+      const t = (source[line - 1] ?? '').trim();
+      return t !== '' && !t.startsWith('//') && !t.startsWith('/*') && !t.startsWith('*');
+    };
+    const f: FileCoverage = { covered: [], missing: [] };
+    for (const m of block.matchAll(/^DA:(\d+),(\d+)/gm)) {
+      const line = Number(m[1]);
+      if (!code(line)) continue;
+      (Number(m[2]) > 0 ? f.covered : f.missing).push(line);
+    }
+    if (f.covered.length + f.missing.length) files[rel] = f;
+  }
+  const r = withPercent(files);
+  if (notMeasured.length) r.notMeasured = notMeasured.sort();
+  return r;
+}
+
 // ---------- runs ----------
 const reports = new Map<string, TestReport | 'running'>();
 
@@ -188,11 +271,14 @@ testsRouter.post(
     const id = req.params.id;
     const dir = projectDir(id);
     const framework = req.body?.framework === 'node' ? 'node' : 'pytest';
+    const withCoverage = req.body?.coverage === true;
     const files = findTestFiles(dir);
     const list = framework === 'node' ? files.js : files.python;
     if (list.length === 0) throw new TestError(400, framework === 'node' ? 'No *.test.js / *.spec.js files' : 'No test_*.py files');
 
-    const report = path.join(os.tmpdir(), `scriptcraft-junit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.xml`);
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const report = path.join(os.tmpdir(), `scriptcraft-junit-${stamp}.xml`);
+    const coverOut = path.join(os.tmpdir(), `scriptcraft-cover-${stamp}.${framework === 'node' ? 'lcov' : 'json'}`);
     const prepared: PreparedRun = { command: '', args: [], filePath: '', cwd: dir, rootDir: dir, inPlace: true };
     // NODE_TEST_CONTEXT: when the studio itself runs under a test runner, a nested `node --test` would report
     // to that runner instead of writing its own report
@@ -202,8 +288,17 @@ testsRouter.post(
     if (framework === 'pytest') {
       command = isWin ? 'python' : 'python3';
       // No .pytest_cache in the project; tests can import project modules from the project root
-      args = ['-m', 'pytest', '--color=yes', '-p', 'no:cacheprovider', '--rootdir', dir, `--junitxml=${report}`, '-o', 'junit_family=xunit1', ...list];
-      env.PYTHONPATH = [dir, env.PYTHONPATH || process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+      args = ['-m', 'pytest', '--color=yes', '-p', 'no:cacheprovider', '--rootdir', dir, `--junitxml=${report}`, '-o', 'junit_family=xunit1'];
+      const pythonPath = [dir, env.PYTHONPATH || process.env.PYTHONPATH];
+      if (withCoverage) {
+        // Our own small plugin: no coverage package needed
+        args.push('-p', 'sc_cover');
+        pythonPath.push(COVER_PLUGIN_DIR);
+        env.SC_COVER_OUT = coverOut;
+        env.SC_COVER_ROOT = dir;
+      }
+      args.push(...list);
+      env.PYTHONPATH = pythonPath.filter(Boolean).join(path.delimiter);
     } else {
       command = 'node';
       const needsTs = list.some((f) => /\.m?ts$/.test(f));
@@ -216,6 +311,7 @@ testsRouter.post(
         '--test-reporter-destination=stdout',
         '--test-reporter=junit',
         `--test-reporter-destination=${report}`,
+        ...(withCoverage ? ['--experimental-test-coverage', '--test-reporter=lcov', `--test-reporter-destination=${coverOut}`] : []),
         ...list,
       ];
     }
@@ -230,6 +326,15 @@ testsRouter.post(
           if (result.total === 0) result.error = 'no-tests';
         } catch {
           result = { framework, total: 0, passed: 0, failed: 0, skipped: 0, cases: [], error: 'no-report' };
+        }
+        if (withCoverage) {
+          try {
+            const text = fs.readFileSync(coverOut, 'utf-8');
+            result.coverage = framework === 'node' ? parseLcov(text, dir) : parsePythonCoverage(text);
+          } catch {
+            /* no coverage (the run broke early): the results still show */
+          }
+          fs.rmSync(coverOut, { force: true });
         }
         fs.rmSync(report, { force: true });
         cleanup(prepared);

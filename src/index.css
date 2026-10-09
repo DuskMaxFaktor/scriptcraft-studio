@@ -398,3 +398,11 @@ body.resizing-y iframe {
   border-bottom: 6px solid transparent;
   border-left: 9px solid #facc15;
 }
+/* Test coverage (Tests tab → Coverage): green bar = a test ran the line, red = no test reached it */
+.monaco-editor .sc-cov-hit,
+.monaco-editor .sc-cov-miss {
+  width: 3px !important;
+  margin-left: 3px;
+}
+.monaco-editor .sc-cov-hit { background: rgba(52, 211, 153, 0.7); }
+.monaco-editor .sc-cov-miss { background: rgba(244, 63, 94, 0.8); }

@@ -37,8 +37,8 @@ async function waitSession(runId: string) {
     .join('');
 }
 
-async function runTests(projectId: string, framework: 'pytest' | 'node') {
-  const start = await api('POST', `/api/projects/${projectId}/tests/run`, { framework });
+async function runTests(projectId: string, framework: 'pytest' | 'node', coverage = false) {
+  const start = await api('POST', `/api/projects/${projectId}/tests/run`, { framework, coverage });
   assert.equal(start.status, 200, JSON.stringify(start.data));
   const output = await waitSession(start.data.runId);
   for (let i = 0; i < 50; i++) {
@@ -132,6 +132,76 @@ test('node --test: JS and TypeScript tests, failure location from the stack', as
   assert.match(broken.message, /4 == 5/);
   assert.match(output, /multiplies/);
   await api('DELETE', `/api/projects/${p.id}`);
+});
+
+test('pytest coverage: which project lines the tests ran, test files left out', { skip: !hasPytest && 'pytest not installed' }, async () => {
+  const p = (
+    await api('POST', '/api/projects', {
+      name: 'pycover',
+      files: [
+        { name: 'calc.py', content: '"""Calc."""\n\n\ndef add(a, b):\n    return a + b\n\n\ndef unused(x):\n    if x:\n        return 1\n    return 2\n' },
+        { name: 'other.py', content: 'VALUE = 1\n' },
+        { name: 'test_calc.py', content: 'from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n' },
+      ],
+    })
+  ).data;
+  const { report, output } = await runTests(p.id, 'pytest', true);
+  assert.equal(report.passed, 1, output);
+  const cov = report.coverage;
+  assert.ok(cov, output);
+  assert.deepEqual(Object.keys(cov.files).sort(), ['calc.py', 'other.py']);
+  // def lines and the docstring run on import, add() ran, unused() did not
+  assert.ok(cov.files['calc.py'].covered.includes(5));
+  assert.deepEqual(cov.files['calc.py'].missing, [9, 10, 11]);
+  // Never imported: all of it missing
+  assert.deepEqual(cov.files['other.py'], { covered: [], missing: [1] });
+  assert.ok(cov.percent > 0 && cov.percent < 100);
+  // Without the option: no coverage
+  assert.equal((await runTests(p.id, 'pytest')).report.coverage, undefined);
+  // Nothing left behind in the project
+  assert.deepEqual(
+    fs.readdirSync(path.join(tmp, 'projects', p.id)).filter((f) => !f.startsWith('.') && f !== '__pycache__').sort(),
+    ['calc.py', 'other.py', 'test_calc.py']
+  );
+  await api('DELETE', `/api/projects/${p.id}`);
+});
+
+test('node coverage: lcov turned into covered / missing code lines', async () => {
+  const p = (
+    await api('POST', '/api/projects', {
+      name: 'jscover',
+      files: [
+        { name: 'lib.js', content: '// helpers\nfunction a(x) {\n  if (x) {\n    return 1;\n  }\n\n  return 2;\n}\nmodule.exports = { a };\n' },
+        { name: 'lib.test.js', content: "const test = require('node:test');\nconst { a } = require('./lib');\ntest('a', () => a(1));\n" },
+      ],
+    })
+  ).data;
+  const { report, output } = await runTests(p.id, 'node', true);
+  assert.equal(report.passed, 1, output);
+  const f = report.coverage?.files['lib.js'];
+  assert.ok(f, JSON.stringify(report.coverage));
+  assert.equal(report.coverage.files['lib.test.js'], undefined);
+  // The comment (1) and the blank line (6) are not code; "return 2" never ran
+  assert.ok(!f.covered.includes(1) && !f.missing.includes(1) && !f.missing.includes(6));
+  assert.deepEqual(f.missing, [7]);
+  assert.ok(f.covered.includes(4));
+  await api('DELETE', `/api/projects/${p.id}`);
+});
+
+test('parseLcov: absolute paths, files outside the project and packages are dropped', async () => {
+  const { parseLcov } = await import(pathToFileURL(path.join(studioRoot, 'api', 'tests.ts')).href);
+  const dir = path.join(tmp, 'lcovdir');
+  const lcov = [
+    `SF:${path.join(dir, 'src', 'a.js')}\nDA:1,3\nDA:2,0\nend_of_record`,
+    `SF:${path.join(tmp, 'elsewhere.js')}\nDA:1,1\nend_of_record`,
+    'SF:node_modules/x/index.js\nDA:1,1\nend_of_record',
+    'SF:util.ts\nDA:1,1\nend_of_record',
+  ].join('\n');
+  const r = parseLcov(lcov, dir);
+  assert.deepEqual(r.files, { 'src/a.js': { covered: [1], missing: [2] } });
+  // TypeScript: listed as not measured instead of wrongly green
+  assert.deepEqual(r.notMeasured, ['util.ts']);
+  assert.equal(r.percent, 50);
 });
 
 test('tests: no test files and bad ids are reported clearly', async () => {

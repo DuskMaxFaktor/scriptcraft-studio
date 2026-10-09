@@ -38,6 +38,7 @@ import {
   formatsWithTools,
 } from '../codeTools.ts';
 import { askText } from '../dialogs.tsx';
+import { useFileCoverage } from '../coverage.ts';
 
 registerInlineCompletions();
 registerCodeTools();
@@ -195,6 +196,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // ---------- breakpoints & current debug line ----------
   const bpCollectionRef = useRef<ReturnType<MonacoEditor['createDecorationsCollection']> | null>(null);
   const debugCollectionRef = useRef<ReturnType<MonacoEditor['createDecorationsCollection']> | null>(null);
+  const coverageCollectionRef = useRef<ReturnType<MonacoEditor['createDecorationsCollection']> | null>(null);
+  const fileCoverage = useFileCoverage(projectId, activeFile.name);
+  const coverageRef = useRef(fileCoverage);
+  coverageRef.current = fileCoverage;
   const bpPropsRef = useRef({ breakpoints, onBreakpointsChange, debugLine });
   bpPropsRef.current = { breakpoints, onBreakpointsChange, debugLine };
 
@@ -259,13 +264,34 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           ]
         : []
     );
+    // Coverage: a thin bar left of the line numbers, and the lines no test reached on the scrollbar
+    const cov = coverageRef.current;
+    const lines = editor.getModel()?.getLineCount() || 0;
+    coverageCollectionRef.current?.set(
+      cov
+        ? [
+            ...cov.covered
+              .filter((l) => l <= lines)
+              .map((l) => ({ range: new monaco.Range(l, 1, l, 1), options: { linesDecorationsClassName: 'sc-cov-hit' } })),
+            ...cov.missing
+              .filter((l) => l <= lines)
+              .map((l) => ({
+                range: new monaco.Range(l, 1, l, 1),
+                options: {
+                  linesDecorationsClassName: 'sc-cov-miss',
+                  overviewRuler: { color: 'rgba(244, 63, 94, 0.6)', position: monaco.editor.OverviewRulerLane.Left },
+                },
+              })),
+          ]
+        : []
+    );
   };
 
   const bpKey = breakpoints.map((b) => `${b.line}:${b.condition || ''}:${b.log || ''}`).join(',');
   useEffect(() => {
     applyDecorations();
     if (debugLine) editorRef.current?.revealLineInCenterIfOutsideViewport(debugLine);
-  }, [bpKey, debugLine, activeFile.id]);
+  }, [bpKey, debugLine, activeFile.id, fileCoverage]);
 
   // Formatting and Ruff checks need the file name (editor models are keyed by file id)
   useEffect(() => subscribeCodeTools(setTools), []);
@@ -307,6 +333,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 
     bpCollectionRef.current = editor.createDecorationsCollection();
     debugCollectionRef.current = editor.createDecorationsCollection();
+    coverageCollectionRef.current = editor.createDecorationsCollection();
     // Left-click in the left margin toggles a breakpoint; right-click sets/edits a condition
     editor.onMouseDown((e) => {
       const type = e.target.type;

@@ -576,6 +576,31 @@ test('tests tab: runs pytest, shows passed / failed and opens the failing test',
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('def test_bad');
 });
 
+test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
+  test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
+  await openStudio(page, request, 'Покрытие', [
+    { name: 'calc.py', content: 'def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n', isEntry: true },
+    { name: 'test_calc.py', content: 'from calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n' },
+  ]);
+  await page.locator('[data-tab="tests"]').click();
+  await page.locator('[data-tests-coverage-toggle]').check();
+  await page.getByRole('button', { name: /Запустить тесты Python/ }).click();
+  const row = page.locator('[data-coverage-file="calc.py"]');
+  await expect(row).toBeVisible({ timeout: 30000 });
+  // 2 def lines + return a + b ran; return a - b did not: 3 of 4
+  await expect(row).toContainText('3/4');
+  await expect(page.locator('[data-coverage-total]')).toHaveText('75%');
+  await expect(row).toHaveAttribute('title', /6/);
+  // Click: calc.py opens with a green / red bar next to the line numbers
+  await row.click();
+  await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('def sub');
+  await expect(page.locator('.monaco-editor .sc-cov-hit')).toHaveCount(3);
+  await expect(page.locator('.monaco-editor .sc-cov-miss')).toHaveCount(1);
+  // Hide: the bars go away
+  await page.locator('[data-coverage-show]').click();
+  await expect(page.locator('.monaco-editor .sc-cov-hit')).toHaveCount(0);
+});
+
 test('chat answer with code: "Create files" makes every named file, the agent hint explains the modes', async ({ page, request }) => {
   const project = (await (await request.post('/api/projects', { data: { name: 'Чат', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
   const answer = 'Вот проект.\n\n**app.py**\n```python\nfrom utils import hello\nprint(hello())\n```\n\n```python\n# utils.py\ndef hello():\n    return "hi"\n```';
