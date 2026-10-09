@@ -269,8 +269,46 @@ const Disassembly: React.FC<{ projectId: string; path: string; info: Info; versi
   const [ins, setIns] = useState<Instruction[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [flash, setFlash] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const section = info.sections.find((s) => s.name === sectionName);
   const canDisasm = info.arch && DISASM_ARCHS.has(info.arch);
+
+  const addrSet = useMemo(() => new Set(ins.map((x) => x.addr)), [ins]);
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return ins;
+    return ins.filter((x) => hex(x.addr, 8).includes(q.replace(/^0x/, '')) || x.mnemonic.includes(q) || x.op.toLowerCase().includes(q));
+  }, [ins, search]);
+
+  // Jump to an address inside this section (from a clicked call/jmp target)
+  const goToAddr = (addr: number) => {
+    setSearch('');
+    setFlash(addr);
+    setTimeout(() => {
+      scrollRef.current?.querySelector(`[data-ins="${addr}"]`)?.scrollIntoView({ block: 'center' });
+    }, 0);
+    setTimeout(() => setFlash((f) => (f === addr ? null : f)), 1500);
+  };
+
+  // Render an operand, making a hex address that points inside this section a clickable jump
+  const renderOp = (op: string) => {
+    const m = /0x([0-9a-fA-F]+)/.exec(op);
+    if (!m) return op;
+    const addr = parseInt(m[1], 16);
+    if (!addrSet.has(addr)) return op;
+    const [before, after] = [op.slice(0, m.index), op.slice(m.index + m[0].length)];
+    return (
+      <>
+        {before}
+        <button onClick={() => goToAddr(addr)} className="text-amber-300 hover:underline" title={t('disasm.jumpTo')}>
+          {m[0]}
+        </button>
+        {after}
+      </>
+    );
+  };
 
   useEffect(() => {
     if (!section || !canDisasm) return;
@@ -308,19 +346,30 @@ const Disassembly: React.FC<{ projectId: string; path: string; info: Info; versi
           ))}
         </select>
         {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-500" />}
+        <div className="relative ml-auto">
+          <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('disasm.searchCode')}
+            data-disasm-search
+            className="w-56 bg-deep border border-slate-700 rounded pl-6 pr-2 py-0.5 font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+        {search.trim() && <span className="text-slate-500">{t('disasm.matches', { count: shown.length })}</span>}
       </div>
-      <div className="flex-1 min-h-0 overflow-auto p-3 font-mono text-[11px] leading-5" data-disasm-view>
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-3 font-mono text-[11px] leading-5" data-disasm-view>
         {error && <p className="text-rose-300">{error}</p>}
         {!error && !loading && ins.length === 0 && <p className="text-slate-400">{t('disasm.noCode')}</p>}
         {!error && ins.length > 0 && (
           <table className="border-collapse">
             <tbody>
-              {ins.map((x, i) => (
-                <tr key={i} className="hover:bg-slate-800/40">
+              {shown.map((x) => (
+                <tr key={x.addr} data-ins={x.addr} className={flash === x.addr ? 'bg-amber-500/25' : 'hover:bg-slate-800/40'}>
                   <td className="pr-4 text-indigo-400 select-none">{hex(x.addr, 8)}</td>
                   <td className="pr-4 text-slate-500 select-none">{x.bytes.replace(/(..)/g, '$1 ').trim()}</td>
                   <td className="pr-3 text-sky-300">{x.mnemonic}</td>
-                  <td className="text-slate-200">{x.op}</td>
+                  <td className="text-slate-200">{renderOp(x.op)}</td>
                 </tr>
               ))}
             </tbody>

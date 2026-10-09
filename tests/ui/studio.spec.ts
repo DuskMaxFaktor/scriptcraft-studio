@@ -729,6 +729,33 @@ test('other files: an image and a SQLite database made by a program open in the 
   await expect(page.locator('.monaco-editor').first()).toBeVisible();
 });
 
+test('disassembler: clicking a jmp target jumps to it; search filters instructions', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  // A tiny x64 PE: jmp 0x14000100a ; 5×nop ; sub rsp,0x28 ; ret
+  const program = [
+    'import base64, zlib',
+    "open('sample.exe', 'wb').write(zlib.decompress(base64.b64decode('eJzzjWIgGzgwMDAEuDIwpLQxooh/YFBi4GZiYOBHFhSAYgYGB0YYn4mBgQ0qDaMZFCDiIMBMpDsEyPcC1YBeSWpFCQPUz1C/wfwBAwoMDAkD5Dyc4CUr0L0TQMCj+Y3G4YF2ziigMwAAckINQA==')))",
+    "print('exe ready')",
+  ].join('\n');
+  await openStudio(page, request, 'Бинарник', [{ name: 'make.py', content: program, isEntry: true }]);
+  await runButton(page).click();
+  await expect(output(page)).toContainText('exe ready');
+  await page.locator('[data-asset="sample.exe"]').click({ timeout: 15_000 });
+  const viewer = page.locator('[data-asset-viewer="sample.exe"]');
+  await viewer.locator('[data-disasm-tab="disasm"]').click();
+  const jmpRow = viewer.locator('[data-ins="5368713216"]');
+  await expect(jmpRow).toContainText('jmp');
+
+  // The jump target is a link: clicking it highlights the target instruction
+  await jmpRow.getByRole('button', { name: '0x14000100a' }).click();
+  await expect(viewer.locator('[data-ins="5368713226"]')).toHaveClass(/bg-amber/);
+
+  // Search narrows the listing
+  await viewer.locator('[data-disasm-search]').fill('ret');
+  await expect(viewer.locator('[data-ins]')).toHaveCount(1);
+  await expect(viewer.locator('[data-ins]')).toContainText('ret');
+});
+
 test('agent: proposes a package install, the user approves, pip runs into the project', async ({ page, request }) => {
   const project = (await (await request.post('/api/projects', { data: { name: 'Install', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
   await page.addInitScript((id) => {
