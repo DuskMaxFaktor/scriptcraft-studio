@@ -69,7 +69,8 @@ test('installer: installs, updates over user data, uninstalls', { skip, timeout:
   assert.equal(fs.readFileSync(path.join(app, 'api', 'new.txt'), 'utf-8'), 'v2');
   assert.equal(fs.readFileSync(path.join(app, '.env'), 'utf-8'), 'GEMINI_API_KEY=mine', 'keys are kept');
   assert.equal(fs.readFileSync(path.join(app, 'projects', 'p1', 'main.py'), 'utf-8'), 'print(1)');
-  assert.equal(fs.existsSync(path.join(app, '.portable-build')), false);
+  // The "ready-made build" marker stays: without it the launcher would run npm install
+  assert.ok(fs.existsSync(path.join(app, '.portable-build')));
   assert.equal(fs.readFileSync(path.join(app, '.installed'), 'utf-8'), JSON.parse(fs.readFileSync('package.json', 'utf-8')).version);
   assert.ok(fs.existsSync(path.join(app, 'Uninstall.exe')));
   assert.ok(fs.statSync(path.join(app, 'Uninstall.exe')).size < fs.statSync(setup).size, 'the uninstaller has no payload');

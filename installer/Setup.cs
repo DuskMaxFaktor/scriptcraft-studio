@@ -179,7 +179,6 @@ namespace ScriptCraftSetup {
                         if (name.EndsWith("\\")) { Directory.CreateDirectory(target); continue; }
                         string top = name.Split('\\')[0];
                         if (Array.IndexOf(UserData, top) >= 0 && File.Exists(target)) continue; // keys, settings: the user's
-                        if (top == ".portable-build") continue; // installed, not portable
                         Directory.CreateDirectory(Path.GetDirectoryName(target));
                         e.ExtractToFile(target, true);
                     }
