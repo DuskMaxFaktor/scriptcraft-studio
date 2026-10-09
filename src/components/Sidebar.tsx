@@ -32,6 +32,7 @@ import { detectLanguageFromName } from '../utils/presets.ts';
 import { pickedFromDataTransfer, PickedFile } from '../utils/projects.ts';
 import { useI18n } from '../i18n.ts';
 import type { ProjectAsset } from '../types.ts';
+import { askConfirm } from '../dialogs.tsx';
 
 interface SidebarProps {
   files: FileItem[];
@@ -309,9 +310,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (confirm(t('sidebar.confirmDeleteFolder', { name: folder.path, count: countFiles(folder) }))) {
-                    onDeleteFolder(folder.path);
-                  }
+                  void askConfirm(t('sidebar.confirmDeleteFolder', { name: folder.path, count: countFiles(folder) }), { danger: true }).then(
+                    (ok) => ok && onDeleteFolder(folder.path)
+                  );
                 }}
                 className="p-0.5 text-slate-400 hover:text-red-400"
                 title={t('sidebar.deleteFolder')}

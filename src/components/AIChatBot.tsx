@@ -45,6 +45,7 @@ import {
 import { lazyNamed } from '../utils/lazy.tsx';
 import { extractCodeFiles, namedFiles } from '../utils/codeFiles.ts';
 import { AgentPlanCard } from './AgentPlanCard.tsx';
+import { askConfirm } from '../dialogs.tsx';
 
 const AI_ROLES: AIRole[] = [
   {
@@ -1032,10 +1033,10 @@ const ChatMessageBubble: React.FC<BubbleProps> = React.memo(({
   const blocks = useMemo(() => (isUser ? [] : extractCodeFiles(message.text)), [isUser, message.text]);
   const named = useMemo(() => namedFiles(blocks), [blocks]);
 
-  const createAll = () => {
+  const createAll = async () => {
     const existing = new Set(fileNamesKey.split('|').map((n) => n.toLowerCase()));
     const replaced = named.filter((f) => existing.has(f.name.toLowerCase())).map((f) => f.name);
-    if (replaced.length && !confirm(t('chat.overwriteConfirm', { list: replaced.join(', ') }))) return;
+    if (replaced.length && !(await askConfirm(t('chat.overwriteConfirm', { list: replaced.join(', ') }), { danger: true }))) return;
     onCreateFiles?.(named);
   };
 

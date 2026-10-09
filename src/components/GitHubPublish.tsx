@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Github, Loader2, LogIn, RefreshCw, Lock, Globe, ExternalLink } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
+import { askConfirm } from '../dialogs.tsx';
 
 // "Publish to GitHub" in the Git panel: the official GitHub CLI creates the repository and pushes the project.
 // Sign-in happens in gh's own window (browser + one-time code); the studio never sees a token.
@@ -54,7 +55,7 @@ export const GitHubPublish: React.FC<Props> = ({ projectId, defaultName, onBefor
   }, [waitingLogin]);
 
   const publish = async () => {
-    if (visibility === 'public' && !confirm(t('gh.confirmPublic', { name }))) return;
+    if (visibility === 'public' && !(await askConfirm(t('gh.confirmPublic', { name })))) return;
     setBusy(true);
     setError(null);
     try {

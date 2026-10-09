@@ -122,12 +122,38 @@ test('deletes a file after confirmation', async ({ page, request }) => {
     { name: 'main.py', content: 'print(1)', isEntry: true },
     { name: 'extra.py', content: 'x = 1' },
   ]);
-  page.once('dialog', (d) => d.accept());
   const row = sidebarFile(page, 'extra.py');
   await row.hover();
   await row.locator('button[title="Удалить"]').click();
+  // A themed confirmation, not the browser's white window; Esc would cancel it
+  await expect(page.locator('[data-dialog="confirm"]')).toContainText('extra.py');
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   await expect(row).toHaveCount(0);
   await expect.poll(() => projectFile(request, project.id, 'extra.py')).toBeUndefined();
+});
+
+test('confirmations use the themed studio window: Esc / Cancel keep things as they are', async ({ page, request }) => {
+  const project = await openStudio(page, request, 'Окна', [
+    { name: 'main.py', content: 'print(1)', isEntry: true },
+    { name: 'keep.py', content: 'x = 1' },
+  ]);
+  const row = sidebarFile(page, 'keep.py');
+  await row.hover();
+  await row.locator('button[title="Удалить"]').click();
+  const dialog = page.locator('[data-dialog="confirm"]');
+  await expect(dialog).toBeVisible();
+  // Not white in the dark theme: the window uses the studio's raised surface color
+  const bg = await dialog.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(bg).not.toBe('rgb(255, 255, 255)');
+  await expect(dialog.locator('[data-dialog-ok]')).toHaveClass(/bg-rose/); // deleting: a red button
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await row.hover();
+  await row.locator('button[title="Удалить"]').click();
+  await page.locator('[data-dialog-cancel]').click();
+  await expect(row).toBeVisible();
+  expect(await projectFile(request, project.id, 'keep.py')).toBe('x = 1');
 });
 
 test('project search finds text in other files', async ({ page, request }) => {
@@ -165,8 +191,8 @@ test('project replace: one occurrence, undo, then replace in all files', async (
   await expect.poll(() => projectFile(request, project.id, 'a.py')).toBe('name = 1\nprint(name)\n');
 
   // Replace everywhere (after confirmation)
-  page.once('dialog', (d) => d.accept());
   await page.getByTitle('Заменить во всех файлах').click();
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   await expect.poll(() => projectFile(request, project.id, 'a.py')).toBe('value = 1\nprint(value)\n');
   await expect.poll(() => projectFile(request, project.id, 'b.py')).toBe('value = 2\n');
 });
@@ -189,16 +215,16 @@ test('programs on this PC: search, problems filter, repair (dry run)', async ({ 
   await modal.locator('[data-apps-problems]').click();
 
   // Repair asks first, then starts the program's own repair (a dry run in tests)
-  page.once('dialog', (d) => d.accept());
   await modal.locator('[data-app-row="Test App"] [data-app-repair]').click();
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   await expect(modal.locator('[data-apps-notice]')).toContainText('Ремонт «Test App» запущен');
   await expect(modal.locator('[data-app-row="Broken Tool"] [data-app-repair]')).toHaveCount(0);
   // Updates: a badge on the program, the updates view, and winget upgrade after confirmation (dry run)
   await expect(modal.locator('[data-app-row="Test App"]')).toContainText('→ 1.3.0');
   await modal.locator('[data-apps-updates]').click();
   await expect(modal.locator('[data-update-row]')).toHaveCount(1);
-  page.once('dialog', (d) => d.accept());
   await modal.locator('[data-update-row="Test.App"] [data-update-install]').click();
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   await expect(modal.locator('[data-apps-notice]')).toContainText('winget upgrade --id Test.App --exact');
 });
 
@@ -349,9 +375,9 @@ test('git panel: create a repository, commit, see a change, view the diff, disca
   await page.keyboard.press('Escape');
   await page.mouse.click(5, 5);
 
-  page.once('dialog', (d) => d.accept());
   await changed.hover();
   await changed.locator('button[title="Отменить изменения"]').click();
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   await expect(page.getByText('Нет изменений с последнего коммита')).toBeVisible();
   // The editor picks up the restored file from disk
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('v1', { timeout: 10000 });
@@ -426,8 +452,8 @@ test('git panel: merge a branch with a conflict — compare, take theirs, finish
   await typeAndCommit('print("main")', 'main change');
 
   await page.keyboard.press('Control+Shift+G');
-  page.once('dialog', (d) => d.accept());
   await page.locator('[data-git-branch="feature"] [data-git-merge]').click();
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   const banner = page.locator('[data-git-merge-banner]');
   await expect(banner.locator('[data-git-conflict="main.py"]')).toBeVisible();
 
@@ -845,8 +871,8 @@ test('trash: a deleted project is restored from the Projects dialog', async ({ p
   await openStudio(page, request, 'Основной', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
   await request.post('/api/projects', { data: { name: 'Черновик', files: [{ name: 'draft.py', language: 'python', content: 'x = 1' }] } });
   await page.locator('button[title^="Мои проекты"]').click();
-  page.once('dialog', (d) => d.accept());
   await page.locator('[data-project-row="Черновик"] button[title="Удалить"]').click();
+  await page.locator('[data-dialog-ok]').click(); // the studio's own (themed) confirmation
   const trash = page.locator('[data-trash]');
   await expect(trash).toContainText('Корзина (1)');
   await trash.getByText('Корзина (1)').click();

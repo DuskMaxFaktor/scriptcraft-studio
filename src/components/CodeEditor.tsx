@@ -37,6 +37,7 @@ import {
   problemCount,
   formatsWithTools,
 } from '../codeTools.ts';
+import { askText } from '../dialogs.tsx';
 
 registerInlineCompletions();
 registerCodeTools();
@@ -317,14 +318,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         e.event.preventDefault();
         const existing = bps.find((b) => b.line === line);
         const current = existing?.log ? `log: ${existing.log}` : existing?.condition || '';
-        const answer = window.prompt(t('debug.conditionPrompt'), current);
-        if (answer === null) return; // cancelled: no change
-        const trimmed = answer.trim();
-        const rest = bps.filter((b) => b.line !== line);
-        // "log: message {x}" makes a logpoint; anything else is a condition (empty = plain breakpoint)
-        const logMatch = /^log:\s*(.+)$/is.exec(trimmed);
-        const bp = logMatch ? { line, log: logMatch[1] } : { line, ...(trimmed ? { condition: trimmed } : {}) };
-        change([...rest, bp].sort((a, b) => a.line - b.line));
+        void askText(t('debug.conditionPrompt'), current).then((answer) => {
+          if (answer === null) return; // cancelled: no change
+          const trimmed = answer.trim();
+          // The breakpoints may have changed while the dialog was open
+          const rest = bpPropsRef.current.breakpoints.filter((b) => b.line !== line);
+          // "log: message {x}" makes a logpoint; anything else is a condition (empty = plain breakpoint)
+          const logMatch = /^log:\s*(.+)$/is.exec(trimmed);
+          const bp = logMatch ? { line, log: logMatch[1] } : { line, ...(trimmed ? { condition: trimmed } : {}) };
+          bpPropsRef.current.onBreakpointsChange?.([...rest, bp].sort((a, b) => a.line - b.line));
+        });
         return;
       }
       change(bps.some((b) => b.line === line) ? bps.filter((b) => b.line !== line) : [...bps, { line }].sort((a, b) => a.line - b.line));

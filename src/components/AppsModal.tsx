@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AppWindow, X, Search, RefreshCw, Wrench, FolderOpen, Loader2, TriangleAlert, CircleCheck, ArrowUpCircle, Power } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
+import { askConfirm } from '../dialogs.tsx';
 
 // "Programs on this PC": installed applications (as in Windows "Programs and Features"),
 // with a health check and the program's own repair. Nothing changes without the user's click.
@@ -192,7 +193,7 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   const updateFor = (app: InstalledApp) => updates?.find((u) => sameProgram(app.name, u.name)) || null;
 
   const installUpdate = async (u: WingetUpdate) => {
-    if (!confirm(t('apps.confirmUpdate', { name: u.name, from: u.version, to: u.available }))) return;
+    if (!(await askConfirm(t('apps.confirmUpdate', { name: u.name, from: u.version, to: u.available }), { okLabel: t('apps.update') }))) return;
     setUpdating(u.id);
     setNotice(null);
     setUpdateLog('');
@@ -215,9 +216,9 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
     }
   };
 
-  const repair = (app: InstalledApp) => {
+  const repair = async (app: InstalledApp) => {
     const how = app.repair === 'msi' ? t('apps.howMsi') : t('apps.howModify');
-    if (!confirm(t('apps.confirmRepair', { name: app.name, how }))) return;
+    if (!(await askConfirm(t('apps.confirmRepair', { name: app.name, how }), { okLabel: t('apps.repair') }))) return;
     void post(app, 'repair');
   };
 

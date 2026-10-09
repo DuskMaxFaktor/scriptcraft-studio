@@ -3,6 +3,7 @@ import { Search, Replace, ChevronRight, ChevronDown, CaseSensitive, WholeWord, R
 import { FileItem } from '../types.ts';
 import { useI18n } from '../i18n.ts';
 import { searchFiles, replaceInText, replaceOneInText, buildRegex, SearchOptions } from '../utils/search.ts';
+import { askConfirm } from '../dialogs.tsx';
 
 interface SearchPanelProps {
   files: FileItem[];
@@ -59,7 +60,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ files, onReveal, onRep
     }
   }, [files, debounced, caseSensitive, wholeWord, regex, include]);
 
-  const replaceIn = (fileIds: string[]) => {
+  const replaceIn = async (fileIds: string[]) => {
     const changes: { fileId: string; content: string }[] = [];
     let count = 0;
     for (const id of fileIds) {
@@ -72,7 +73,7 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ files, onReveal, onRep
       }
     }
     if (changes.length === 0) return;
-    if (!confirm(t('search.confirmReplace', { count, files: changes.length, text: replacement }))) return;
+    if (!(await askConfirm(t('search.confirmReplace', { count, files: changes.length, text: replacement }), { okLabel: t('search.replaceAll') }))) return;
     applyWithUndo(changes, count);
   };
 

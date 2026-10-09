@@ -29,6 +29,7 @@ import {
   ProjectFilePayload,
   type TrashedProject,
 } from '../utils/projects.ts';
+import { askConfirm, showAlert } from '../dialogs.tsx';
 
 interface ProjectsModalProps {
   isOpen: boolean;
@@ -151,7 +152,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
         rootFolder ||
         (first.toLowerCase().endsWith('.zip') ? first.replace(/\.zip$/i, '') : first.replace(/\.[^.]+$/, ''));
       await onImportAsProject(name, files);
-      if (skipped.length) alert(t('projects.skipped', { files: skipped.slice(0, 30).join(', ') }));
+      if (skipped.length) await showAlert(t('projects.skipped', { files: skipped.slice(0, 30).join(', ') }));
       onClose();
     });
     if (importInputRef.current) importInputRef.current.value = '';
@@ -168,8 +169,8 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
       await refresh();
     });
 
-  const handleDelete = (p: ProjectSummary) => {
-    if (!confirm(t('projects.confirmDelete', { name: p.name }))) return;
+  const handleDelete = async (p: ProjectSummary) => {
+    if (!(await askConfirm(t('projects.confirmDelete', { name: p.name }), { danger: true }))) return;
     run(p.id, async () => {
       await projectsApi.remove(p.id);
       onProjectDeleted(p.id);
@@ -184,16 +185,16 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
       setNotice(t('projects.restored', { name: r.name }));
     });
 
-  const handleDeleteForever = (p: TrashedProject) => {
-    if (!confirm(t('projects.confirmDeleteForever', { name: p.name }))) return;
+  const handleDeleteForever = async (p: TrashedProject) => {
+    if (!(await askConfirm(t('projects.confirmDeleteForever', { name: p.name }), { danger: true }))) return;
     run(p.trashId, async () => {
       await projectsApi.deleteForever(p.trashId);
       await refresh();
     });
   };
 
-  const handleEmptyTrash = () => {
-    if (!confirm(t('projects.confirmEmptyTrash', { count: trash.length }))) return;
+  const handleEmptyTrash = async () => {
+    if (!(await askConfirm(t('projects.confirmEmptyTrash', { count: trash.length }), { danger: true }))) return;
     run(null, async () => {
       await projectsApi.emptyTrash();
       await refresh();

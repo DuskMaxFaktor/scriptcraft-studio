@@ -21,6 +21,7 @@ import { useTheme } from '../theme.ts';
 import { detectLanguageFromName } from '../utils/presets.ts';
 import '../monacoSetup.ts';
 import { GitHubPublish, GitHubLink } from './GitHubPublish.tsx';
+import { askConfirm } from '../dialogs.tsx';
 
 interface GitFile {
   path: string;
@@ -186,9 +187,9 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
     });
   };
 
-  const discard = (f: GitFile) => {
+  const discard = async (f: GitFile) => {
     const text = f.status === '?' || f.status === 'A' ? t('git.confirmDiscardNew', { name: f.path }) : t('git.confirmDiscard', { name: f.path });
-    if (!confirm(text)) return;
+    if (!(await askConfirm(text, { danger: true }))) return;
     run(`discard:${f.path}`, () => call(`${base}/discard`, { path: f.path }));
   };
 
@@ -227,15 +228,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
   };
   const switchBranch = (name: string) =>
     run(`switch:${name}`, () => call(`${base}/switch`, { name }), () => onLog('success', t('git.switched', { name })));
-  const deleteBranch = (name: string) => {
-    if (!confirm(t('git.confirmDeleteBranch', { name }))) return;
+  const deleteBranch = async (name: string) => {
+    if (!(await askConfirm(t('git.confirmDeleteBranch', { name }), { danger: true }))) return;
     run(`delete:${name}`, async () => {
       await call(`${base}/branches/delete`, { name });
     });
   };
 
-  const mergeBranch = (name: string) => {
-    if (!confirm(t('git.confirmMerge', { name, into: status?.branch || '' }))) return;
+  const mergeBranch = async (name: string) => {
+    if (!(await askConfirm(t('git.confirmMerge', { name, into: status?.branch || '' }), { okLabel: t('git.merge') }))) return;
     run(`merge:${name}`, () => call<GitStatus & { merged?: boolean; upToDate?: boolean; conflicts?: string[] }>(`${base}/merge`, { name }), (s) => {
       const r = s as GitStatus & { merged?: boolean; upToDate?: boolean; conflicts?: string[] };
       if (r.merged) onLog('success', r.upToDate ? t('git.mergeUpToDate', { name }) : t('git.merged', { name }));
@@ -256,8 +257,8 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
     run('commit', () => call(`${base}/commit`, { message: status?.mergeBranch ? `Merge branch '${status.mergeBranch}'` : 'Merge' }), () =>
       onLog('success', t('git.mergeFinished', { name: status?.mergeBranch || '' }))
     );
-  const abortMerge = () => {
-    if (!confirm(t('git.confirmAbortMerge'))) return;
+  const abortMerge = async () => {
+    if (!(await askConfirm(t('git.confirmAbortMerge'), { danger: true }))) return;
     run('abort', () => call(`${base}/merge/abort`, {}));
   };
 

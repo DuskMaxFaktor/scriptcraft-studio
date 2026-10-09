@@ -31,6 +31,7 @@ import {
 } from './utils/execution.ts';
 import { startInteractiveRun, attachRunStream, InteractiveRun, RunOutcome } from './utils/interactiveRun.ts';
 import { t, useI18n, aiLanguageInstruction, getLang } from './i18n.ts';
+import { DialogHost, askConfirm, showAlert } from './dialogs.tsx';
 
 export default function App() {
   useI18n();
@@ -935,7 +936,7 @@ export default function App() {
 
   const handleCreateFile = (name: string, language: FileLanguage) => {
     if (isNameTaken(name)) {
-      alert(t('app.nameTaken', { name }));
+      void showAlert(t('app.nameTaken', { name }));
       return;
     }
     const newFile: FileItem = {
@@ -951,7 +952,7 @@ export default function App() {
 
   const handleRenameFile = (fileId: string, newName: string) => {
     if (isNameTaken(newName, fileId)) {
-      alert(t('app.nameTaken', { name: newName }));
+      void showAlert(t('app.nameTaken', { name: newName }));
       return;
     }
     const newLang = detectLanguageFromName(newName);
@@ -964,9 +965,9 @@ export default function App() {
   const fallbackActive = (remaining: FileItem[], tabs: string[]) =>
     tabs.find((id) => remaining.some((f) => f.id === id)) || remaining[0]?.id || '';
 
-  const handleDeleteFile = (fileId: string) => {
+  const handleDeleteFile = async (fileId: string) => {
     const file = files.find((f) => f.id === fileId);
-    if (!file || !confirm(t('app.confirmDeleteFile', { name: file.name }))) return;
+    if (!file || !(await askConfirm(t('app.confirmDeleteFile', { name: file.name }), { danger: true }))) return;
     const remaining = files.filter((f) => f.id !== fileId);
     const tabs = openTabIds.filter((id) => id !== fileId);
     setFiles(remaining);
@@ -1325,6 +1326,7 @@ export default function App() {
         onRestore={handleRestoreVersion}
       />
       </Deferred>
+      <DialogHost />
       <QuickOpen isOpen={isQuickOpen} files={files} onClose={() => setIsQuickOpen(false)} onOpen={(id) => setActiveFileId(id)} />
       <Deferred when={isAppsOpen}>
       <AppsModal isOpen={isAppsOpen} onClose={() => setIsAppsOpen(false)} />
