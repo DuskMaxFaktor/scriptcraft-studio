@@ -20,7 +20,8 @@ import {
   Square,
   Workflow,
   ImagePlus,
-  X as XIcon
+  X as XIcon,
+  Pencil
 } from 'lucide-react';
 import { ChatMessage, AIRole, FileItem } from '../types.ts';
 import { useModels } from '../utils/models.ts';
@@ -148,6 +149,11 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
 
   const [input, setInput] = useState('');
   const [images, setImages] = useState<{ mime: string; data: string }[]>([]);
+  // Text/code files attached to the next message (their content goes into the prompt)
+  const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([]);
+  const [fileNotice, setFileNotice] = useState<string | null>(null);
+  // The last request sent to the model, so "Regenerate" can replay it exactly (context included)
+  const lastPayloadRef = useRef<{ role: string; text: string; images?: { mime: string; data: string }[] }[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
@@ -402,6 +408,31 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     );
     setImages((prev) => [...prev, ...read.filter((x) => x.data)].slice(0, MAX_IMAGES));
   };
+  const MAX_TEXT_FILES = 5;
+  const TEXT_MAX_BYTES = 300 * 1024;
+  /** Attach dropped / picked files: pictures as images, text and code files as prompt context. */
+  const addFiles = async (incoming: (File | null)[]) => {
+    const all = incoming.filter((f): f is File => !!f);
+    const imgs = all.filter((f) => f.type.startsWith('image/'));
+    if (imgs.length) await addImageFiles(imgs);
+    const texts: { name: string; content: string }[] = [];
+    for (const f of all.filter((f) => !f.type.startsWith('image/'))) {
+      if (f.size > TEXT_MAX_BYTES) {
+        setFileNotice(t('chat.fileTooBig', { name: f.name }));
+        continue;
+      }
+      const content = await f.text();
+      if (content.includes('\u0000')) {
+        setFileNotice(t('chat.fileBinary', { name: f.name }));
+        continue;
+      }
+      texts.push({ name: f.name, content });
+    }
+    if (texts.length) {
+      setFileNotice(null);
+      setAttachedFiles((prev) => [...prev.filter((p) => !texts.some((x) => x.name === p.name)), ...texts].slice(0, MAX_TEXT_FILES));
+    }
+  };
   const onPasteInput = (e: React.ClipboardEvent) => {
     const imgs = Array.from(e.clipboardData.items).filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile());
     if (imgs.length) {
@@ -410,9 +441,9 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     }
   };
   const onDropInput = (e: React.DragEvent) => {
-    if (Array.from(e.dataTransfer.files).some((f) => f.type.startsWith('image/'))) {
+    if (e.dataTransfer.files.length) {
       e.preventDefault();
-      void addImageFiles(Array.from(e.dataTransfer.files));
+      void addFiles(Array.from(e.dataTransfer.files));
     }
   };
 
@@ -420,7 +451,8 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
   const handleSendMessage = async (customPrompt?: string, displayText?: string) => {
     const textToSend = customPrompt || input.trim();
     const outgoingImages = customPrompt ? [] : images;
-    if ((!textToSend && outgoingImages.length === 0) || isLoading) return;
+    const outgoingFiles = customPrompt ? [] : attachedFiles;
+    if ((!textToSend && outgoingImages.length === 0 && outgoingFiles.length === 0) || isLoading) return;
 
     if (agentMode && !customPrompt) return handleRunAgent(textToSend);
 
@@ -436,6 +468,11 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
         `${textToSend}\n\n[Context: the whole project${activeFile ? `; the user is currently editing "${activeFile.name}"` : ''}]\n` +
         buildProjectContext(filesFromItems(files));
     }
+    // Attached files: their full text goes to the model with the message
+    for (const f of outgoingFiles) {
+      const lang = f.name.includes('.') ? f.name.split('.').pop() : '';
+      fullPromptText += `\n\n[Attached file "${f.name}"]:\n\`\`\`${lang}\n${f.content}\n\`\`\``;
+    }
 
     const userMessage: ChatMessage = {
       id: `usr-${Date.now()}`,
@@ -444,6 +481,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
       timestamp: nowTime(),
       attachedCodeSnippet: snippetMeta,
       images: outgoingImages.length ? outgoingImages : undefined,
+      attachedFiles: outgoingFiles.length ? outgoingFiles.map((f) => ({ name: f.name, size: f.content.length })) : undefined,
     };
 
     const newMessagesList = [...messages, userMessage];
@@ -451,23 +489,29 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     setMessages([...newMessagesList, { id: aiId, role: 'model', text: '', timestamp: nowTime(), modelUsed: selectedModel.id, roleUsed: selectedRole.id }]);
     setInput('');
     setImages([]);
-    setIsLoading(true);
+    setAttachedFiles([]);
 
+    // Build conversation payload; the last prompt carries the full attached context
+    const payloadMessages = newMessagesList
+      .filter((m) => m.id !== 'msg-welcome' && m.id !== 'msg-welcome-new' && (m.text || m.images?.length || m.attachedFiles?.length))
+      .map((m) => ({ role: m.role, text: m.text }) as { role: string; text: string; images?: { mime: string; data: string }[] });
+    const lastPayload = payloadMessages[payloadMessages.length - 1];
+    lastPayload.text = fullPromptText;
+    // Images go only on the latest message (keeps the request small); vision models read them
+    if (outgoingImages.length) lastPayload.images = outgoingImages;
+    lastPayloadRef.current = payloadMessages;
+    await streamAnswer(payloadMessages, aiId);
+  };
+
+  /** Stream the model's answer to `payloadMessages` into the (empty) model message `aiId`. */
+  const streamAnswer = async (payloadMessages: { role: string; text: string; images?: { mime: string; data: string }[] }[], aiId: string) => {
+    setIsLoading(true);
     const controller = new AbortController();
     abortRef.current = controller;
     const appendText = (chunk: string) =>
       setMessages((prev) => prev.map((m) => (m.id === aiId ? { ...m, text: m.text + chunk } : m)));
 
     try {
-      // Build conversation payload; the last prompt carries the full attached context
-      const payloadMessages = newMessagesList
-        .filter((m) => m.id !== 'msg-welcome' && m.id !== 'msg-welcome-new' && (m.text || m.images?.length))
-        .map((m) => ({ role: m.role, text: m.text }) as { role: string; text: string; images?: { mime: string; data: string }[] });
-      const lastPayload = payloadMessages[payloadMessages.length - 1];
-      lastPayload.text = fullPromptText;
-      // Images go only on the latest message (keeps the request small); vision models read them
-      if (outgoingImages.length) lastPayload.images = outgoingImages;
-
       const res = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -520,6 +564,35 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     }
   };
 
+  /** Ask again for the last answer (same question and context), replacing it. */
+  const handleRegenerate = async () => {
+    if (isLoading) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'model') return;
+    const history = messages.slice(0, -1);
+    const payload =
+      lastPayloadRef.current ??
+      history
+        .filter((m) => m.id !== 'msg-welcome' && m.id !== 'msg-welcome-new' && (m.text || m.images?.length))
+        .map((m) => ({ role: m.role, text: m.text, ...(m.images?.length ? { images: m.images } : {}) }));
+    if (!payload.length || payload[payload.length - 1].role !== 'user') return;
+    const aiId = `ai-${Date.now()}`;
+    setMessages([...history, { id: aiId, role: 'model', text: '', timestamp: nowTime(), modelUsed: selectedModel.id, roleUsed: selectedRole.id }]);
+    await streamAnswer(payload, aiId);
+  };
+
+  /** Put the last question back into the input to edit it (it and its answer are removed). */
+  const handleEditLast = (id: string) => {
+    if (isLoading) return;
+    const idx = messages.findIndex((m) => m.id === id);
+    if (idx < 0) return;
+    const msg = messages[idx];
+    setMessages(messages.slice(0, idx));
+    setInput(msg.text);
+    setImages(msg.images || []);
+    lastPayloadRef.current = null;
+  };
+
   // Prompts coming from other parts of the app are sent once, as soon as they arrive
   useEffect(() => {
     if (!externalRequest || handledRequestRef.current === externalRequest.id || isLoading) return;
@@ -541,6 +614,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
   const lastMessage = messages[messages.length - 1];
   const fileNamesKey = files.map((f) => f.name).join('|');
   const lastModelId = [...messages].reverse().find((m) => m.role === 'model' && !m.id.startsWith('msg-welcome'))?.id;
+  const lastUserId = [...messages].reverse().find((m) => m.role === 'user')?.id;
   const waitingForFirstToken = isLoading && !agentMode && lastMessage?.role === 'model' && !lastMessage.text;
 
   return (
@@ -717,6 +791,12 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
               fileNamesKey={fileNamesKey}
               showAgentHint={!agentMode && msg.id === lastModelId}
               onEnableAgent={() => setAgentMode(true)}
+              onRegenerate={
+                !isLoading && msg.role === 'model' && msg.id === messages[messages.length - 1]?.id && msg.roleUsed !== 'agent' && !msg.id.startsWith('msg-welcome')
+                  ? handleRegenerate
+                  : undefined
+              }
+              onEdit={!isLoading && msg.role === 'user' && msg.id === lastUserId ? () => handleEditLast(msg.id) : undefined}
             />
           )
         )}
@@ -826,6 +906,21 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
           onDragOver={(e) => e.preventDefault()}
           className="bg-panel border border-slate-700/80 rounded-lg p-1.5 focus-within:border-indigo-500 transition-colors"
         >
+          {attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-1.5" data-chat-files>
+              {attachedFiles.map((f) => (
+                <span key={f.name} className="flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-deep border border-slate-700 text-[11px] font-mono text-slate-200" data-chat-file-chip>
+                  <FileCode className="w-3 h-3 text-indigo-400" />
+                  {f.name}
+                  <span className="text-slate-500">{f.content.length > 1024 ? `${Math.round(f.content.length / 1024)} KB` : `${f.content.length} B`}</span>
+                  <button onClick={() => setAttachedFiles((p) => p.filter((x) => x.name !== f.name))} className="p-0.5 text-slate-400 hover:text-white" title={t('chat.removeFile')}>
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {fileNotice && <div className="mb-1.5 text-[11px] text-amber-300">{fileNotice}</div>}
           {images.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5" data-chat-images>
               {images.map((im, i) => (
@@ -855,11 +950,10 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
               ref={fileInputRef}
               type="file"
               data-chat-file
-              accept="image/png,image/jpeg,image/webp,image/gif"
               multiple
               className="hidden"
               onChange={(e) => {
-                void addImageFiles(Array.from(e.target.files || []));
+                void addFiles(Array.from(e.target.files || []));
                 e.target.value = '';
               }}
             />
@@ -888,7 +982,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
             ) : (
               <button
                 onClick={() => handleSendMessage()}
-                disabled={!input.trim() && images.length === 0}
+                disabled={!input.trim() && images.length === 0 && attachedFiles.length === 0}
                 className="p-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white shrink-0 shadow transition-colors"
                 title={t('chat.send')}
               >
@@ -915,6 +1009,10 @@ interface BubbleProps {
   /** Under the latest answer with code while agent mode is off: explain how the AI can write files itself */
   showAgentHint?: boolean;
   onEnableAgent?: () => void;
+  /** Under the latest answer: ask the model again */
+  onRegenerate?: () => void;
+  /** On the latest question: put it back into the input to edit */
+  onEdit?: () => void;
 }
 
 const ChatMessageBubble: React.FC<BubbleProps> = React.memo(({
@@ -926,6 +1024,8 @@ const ChatMessageBubble: React.FC<BubbleProps> = React.memo(({
   fileNamesKey = '',
   showAgentHint,
   onEnableAgent,
+  onRegenerate,
+  onEdit,
 }) => {
   const isUser = message.role === 'user';
   const { t } = useI18n();
@@ -982,6 +1082,15 @@ const ChatMessageBubble: React.FC<BubbleProps> = React.memo(({
                 ))}
               </div>
             )}
+            {message.attachedFiles && message.attachedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-1.5" data-message-files>
+                {message.attachedFiles.map((f) => (
+                  <span key={f.name} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-500/30 text-[10px] font-mono">
+                    <FileCode className="w-3 h-3" /> {f.name}
+                  </span>
+                ))}
+              </div>
+            )}
             {message.text && <div className="whitespace-pre-wrap leading-relaxed text-xs break-words">{message.text}</div>}
           </div>
         ) : (
@@ -1020,6 +1129,16 @@ const ChatMessageBubble: React.FC<BubbleProps> = React.memo(({
       <div className="flex items-center gap-2 mt-1 px-1 text-[10px] text-slate-400">
         <span>{message.timestamp}</span>
         {message.modelUsed && <span>· {message.modelUsed}</span>}
+        {onRegenerate && (
+          <button onClick={onRegenerate} data-regenerate className="flex items-center gap-1 hover:text-indigo-300" title={t('chat.regenerateTitle')}>
+            <RefreshCw className="w-3 h-3" /> {t('chat.regenerate')}
+          </button>
+        )}
+        {onEdit && (
+          <button onClick={onEdit} data-edit-message className="flex items-center gap-1 hover:text-indigo-300" title={t('chat.editTitle')}>
+            <Pencil className="w-3 h-3" /> {t('chat.edit')}
+          </button>
+        )}
       </div>
     </div>
   );

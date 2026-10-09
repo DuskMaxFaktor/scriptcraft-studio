@@ -52,6 +52,8 @@ export interface ChatMessage {
   };
   /** Images attached by the user (base64, no data: prefix) — sent to vision models */
   images?: { mime: string; data: string }[];
+  /** Text/code files attached to the message (their content went into the prompt) */
+  attachedFiles?: { name: string; size: number }[];
 }
 
 export interface ModelOption {

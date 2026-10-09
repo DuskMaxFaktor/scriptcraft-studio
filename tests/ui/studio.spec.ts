@@ -605,6 +605,45 @@ test('notebook: Interrupt stops a stuck cell and the kernel stays usable', async
   await page.goto('about:blank');
 });
 
+test('chat: attach a code file as context, regenerate the answer, edit the question', async ({ page, request }) => {
+  const bodies: any[] = [];
+  await page.route('**/api/chat/stream', async (route) => {
+    bodies.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+      body: `data: {"t":"Ответ ${bodies.length}"}\n\ndata: {"done":true,"model":"test"}\n\n`,
+    });
+  });
+  await page.addInitScript(() => localStorage.setItem('scriptcraft-agent-mode', 'off'));
+  await openStudio(page, request, 'Файлы в чат', [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }]);
+
+  // A text file becomes a chip; its content goes to the model with the question
+  await page.locator('input[data-chat-file]').setInputFiles({ name: 'notes.py', mimeType: 'text/x-python', buffer: Buffer.from('SECRET = 42\n') });
+  await expect(page.locator('[data-chat-file-chip]')).toContainText('notes.py');
+  const chat = page.getByPlaceholder(/Попросите ИИ/);
+  await chat.fill('что в файле?');
+  await chat.press('Enter');
+  await expect(page.locator('.chat-md').getByText('Ответ 1')).toBeVisible();
+  await expect(page.locator('[data-message-files]')).toContainText('notes.py');
+  const sent = bodies[0].messages.at(-1).text;
+  expect(sent).toContain('что в файле?');
+  expect(sent).toContain('[Attached file "notes.py"]');
+  expect(sent).toContain('SECRET = 42');
+  await expect(page.locator('[data-chat-file-chip]')).toHaveCount(0);
+
+  // Regenerate: the same request again (context included), the answer is replaced
+  await page.locator('[data-regenerate]').click();
+  await expect(page.locator('.chat-md').getByText('Ответ 2')).toBeVisible();
+  await expect(page.locator('.chat-md').getByText('Ответ 1')).toHaveCount(0);
+  expect(bodies[1].messages).toEqual(bodies[0].messages);
+
+  // Edit: the question returns to the input, the question and its answer leave the thread
+  await page.locator('[data-edit-message]').click();
+  await expect(chat).toHaveValue('что в файле?');
+  await expect(page.locator('.chat-md').getByText('Ответ 2')).toHaveCount(0);
+});
+
 test('build .exe from the Export menu', async ({ page, request }) => {
   test.setTimeout(240_000);
   const project = await openStudio(page, request, 'Сборка', [{ name: 'hello.py', content: 'print("hello from exe")', isEntry: true }]);
