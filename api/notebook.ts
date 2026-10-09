@@ -164,6 +164,18 @@ notebookRouter.post('/kernel/:id/exec', (req, res) => {
   res.json({ execId });
 });
 
+// Interrupt the running cell (soft: KeyboardInterrupt in the kernel; the namespace is kept)
+notebookRouter.post('/kernel/:id/interrupt', (req, res) => {
+  const k = kernels.get(req.params.id);
+  if (!k) return res.status(404).json({ error: 'Kernel not found' });
+  try {
+    k.proc.stdin?.write(JSON.stringify({ cmd: 'interrupt' }) + '\n');
+  } catch {
+    // kernel gone
+  }
+  res.json({ ok: true });
+});
+
 // Restart: a fresh namespace. The kernel id stays the same, so the open event stream keeps working.
 notebookRouter.post('/kernel/:id/restart', (req, res) => {
   const k = kernels.get(req.params.id);

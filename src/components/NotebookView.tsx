@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { Play, Plus, RotateCcw, Trash2, ChevronUp, ChevronDown, Loader2, Code2, FileText, Circle } from 'lucide-react';
+import { Play, Plus, RotateCcw, Trash2, ChevronUp, ChevronDown, Loader2, Code2, FileText, Circle, Square } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
 import '../monacoSetup.ts';
@@ -325,6 +325,11 @@ export const NotebookView: React.FC<Props> = ({ content, projectId, onChange }) 
     for (const c of cellsRef.current) if (c.type === 'code') await runCell(c);
   }
 
+  async function interruptKernel() {
+    const id = kernelIdRef.current;
+    if (id) await fetch(`/api/notebook/kernel/${id}/interrupt`, { method: 'POST' }).catch(() => {});
+  }
+
   async function restartKernel() {
     const id = kernelIdRef.current;
     if (!id) return;
@@ -368,6 +373,11 @@ export const NotebookView: React.FC<Props> = ({ content, projectId, onChange }) 
         <button onClick={() => addCell('markdown')} className="flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-hover text-slate-200">
           <FileText className="w-3.5 h-3.5" /> {t('nb.addMd')}
         </button>
+        {kernelStatus === 'busy' && (
+          <button onClick={interruptKernel} data-nb-interrupt className="flex items-center gap-1 px-2 py-1 rounded border border-rose-500/60 text-rose-300 hover:bg-rose-500/10" title={t('nb.interrupt')}>
+            <Square className="w-3 h-3 fill-current" /> {t('nb.interrupt')}
+          </button>
+        )}
         <button onClick={restartKernel} className="flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-hover text-slate-200" title={t('nb.restart')}>
           <RotateCcw className="w-3.5 h-3.5" /> {t('nb.restart')}
         </button>

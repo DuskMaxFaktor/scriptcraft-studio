@@ -12,6 +12,9 @@ import io
 import json
 import ast
 import base64
+import ctypes
+import queue
+import threading
 import traceback
 
 _real_stdout = sys.stdout
@@ -127,12 +130,33 @@ def run_cell(code):
         return "error"
 
 
+# Cells run on their own thread so the main thread can still read an "interrupt" command while a cell runs
+_exec_q: "queue.Queue" = queue.Queue()
+_executor_tid = [None]
+
+
+def _executor():
+    _executor_tid[0] = threading.get_ident()
+    while True:
+        msg = _exec_q.get()
+        _cur["id"] = msg.get("execId")
+        status = run_cell(msg.get("code") or "")
+        send({"execId": _cur["id"], "type": "done", "status": status})
+
+
+def _interrupt():
+    """Raise KeyboardInterrupt in the executor thread (soft interrupt, keeps the namespace)."""
+    tid = _executor_tid[0]
+    if tid is not None:
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(tid), ctypes.py_object(KeyboardInterrupt))
+
+
 def main():
     sys.stdout = _Stream("stdout")
     sys.stderr = _Stream("stderr")
+    threading.Thread(target=_executor, daemon=True).start()
     send({"ready": True})
-    # readline() (not "for line in sys.stdin") so each request is handled as soon as it arrives,
-    # instead of waiting for the input buffer to fill
+    # readline() (not "for line in sys.stdin") so each request is handled as soon as it arrives
     stdin = sys.__stdin__
     while True:
         raw = stdin.readline()
@@ -145,10 +169,10 @@ def main():
             msg = json.loads(raw)
         except ValueError:
             continue
-        _cur["id"] = msg.get("execId")
-        code = msg.get("code") or ""
-        status = run_cell(code)
-        send({"execId": _cur["id"], "type": "done", "status": status})
+        if msg.get("cmd") == "interrupt":
+            _interrupt()
+        else:
+            _exec_q.put(msg)
 
 
 if __name__ == "__main__":

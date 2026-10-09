@@ -124,6 +124,27 @@ test('kernel: state persists between cells, output streams, errors and restart c
   assert.equal((await api('DELETE', `/api/notebook/kernel/${kernelId}`)).status, 200);
 });
 
+test('interrupt stops a running cell but keeps the namespace', { skip: !hasPython && 'python not installed' }, async () => {
+  const start = await api('POST', '/api/notebook/kernel/start', {});
+  const kernelId = start.data.kernelId;
+  const wait = kernelEvents(kernelId);
+
+  // Mark state, then spin forever (don't await "done" — the cell will not finish on its own)
+  const r = await api('POST', `/api/notebook/kernel/${kernelId}/exec`, { code: 'ran = True\nwhile True:\n    pass' });
+  await new Promise((res) => setTimeout(res, 500)); // let it spin
+  assert.equal((await api('POST', `/api/notebook/kernel/${kernelId}/interrupt`)).status, 200);
+
+  const ev = await wait(r.data.execId);
+  assert.equal(ev.at(-1).status, 'error');
+  assert.equal(ev.find((e) => e.type === 'error')?.ename, 'KeyboardInterrupt');
+
+  // The namespace survived the interrupt (unlike a restart)
+  const after = await wait((await api('POST', `/api/notebook/kernel/${kernelId}/exec`, { code: 'ran' })).data.execId);
+  assert.equal(after.find((e) => e.type === 'result')?.text, 'True');
+
+  await api('DELETE', `/api/notebook/kernel/${kernelId}`);
+});
+
 test('a rich object (_repr_png_) is shown as an image, not text', { skip: !hasPython && 'python not installed' }, async () => {
   const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   const start = await api('POST', '/api/notebook/kernel/start', {});

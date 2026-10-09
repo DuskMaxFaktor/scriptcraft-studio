@@ -534,6 +534,29 @@ test('emmet: an HTML abbreviation expands on Tab', async ({ page, request }) => 
   await expect(lines).toContainText('<li></li>');
 });
 
+test('notebook: Interrupt stops a stuck cell and the kernel stays usable', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const ipynb = JSON.stringify({
+    cells: [{ cell_type: 'code', metadata: {}, execution_count: null, source: ['while True:\n    pass'], outputs: [] }],
+    metadata: {},
+    nbformat: 4,
+    nbformat_minor: 5,
+  });
+  const project = (await (await request.post('/api/projects', { data: { name: 'Прерывание', files: [{ name: 'loop.ipynb', language: 'text', content: ipynb, isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => localStorage.setItem('scriptcraft-last-project', id), project.id);
+  await page.goto('/');
+  await expect(page.locator('[data-notebook]')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Запустить всё', exact: true }).click();
+  const stop = page.locator('[data-nb-interrupt]');
+  await expect(stop).toBeVisible({ timeout: 15_000 }); // appears while the cell runs
+  await stop.click();
+  // The stuck cell is interrupted and the kernel returns to ready
+  await expect(page.locator('[data-cell-output]')).toContainText('KeyboardInterrupt', { timeout: 15_000 });
+  await expect(page.locator('[data-kernel-status="ready"]')).toBeVisible();
+  await page.goto('about:blank');
+});
+
 test('build .exe from the Export menu', async ({ page, request }) => {
   test.setTimeout(240_000);
   const project = await openStudio(page, request, 'Сборка', [{ name: 'hello.py', content: 'print("hello from exe")', isEntry: true }]);
