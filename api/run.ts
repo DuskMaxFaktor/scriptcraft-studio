@@ -208,13 +208,18 @@ export function spawnCommand(command: string, args: string[], cwd: string, extra
     ...extraEnv,
   };
   for (const [k, v] of Object.entries(env)) if (v === undefined) delete env[k];
-  return spawn(command, spawnArgs, {
+  const proc = spawn(command, spawnArgs, {
     cwd,
     env,
     shell: isWin,
     windowsHide: true,
   });
+  procCwd.set(proc, path.resolve(cwd));
+  return proc;
 }
+
+/** The folder each spawned process works in, so a project's processes can be found before it is deleted. */
+const procCwd = new WeakMap<ChildProcess, string>();
 
 function spawnPrepared(run: PreparedRun, projectId?: string): ChildProcess {
   // Command-line arguments from the project's run parameters go after the script
@@ -328,6 +333,32 @@ function stopSession(session: RunSession, reason: 'stopped' | 'timeout' | 'outpu
   if (session.done) return;
   session.stopReason = reason;
   killProcessTree(session.proc);
+}
+
+/**
+ * Stop every running session (program, debugger, tests, package install, .exe build) that works inside
+ * a project's folder, and wait for it to exit — otherwise Windows keeps the folder locked and the project
+ * cannot be moved to the trash.
+ */
+export async function stopProjectRuns(projectId: string): Promise<number> {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(projectId)) return 0;
+  const dir = path.resolve(process.cwd(), 'projects', projectId);
+  const exits: Promise<void>[] = [];
+  for (const s of sessions.values()) {
+    if (s.done) continue;
+    const cwd = procCwd.get(s.proc);
+    if (!cwd || (cwd !== dir && !cwd.startsWith(dir + path.sep))) continue;
+    exits.push(
+      new Promise<void>((resolve) => {
+        if (s.proc.exitCode !== null) return resolve();
+        s.proc.once('close', () => resolve());
+        setTimeout(resolve, 5000); // never wait forever
+      })
+    );
+    stopSession(s, 'stopped');
+  }
+  await Promise.all(exits);
+  return exits.length;
 }
 
 export const runRouter = Router();

@@ -559,3 +559,23 @@ test('web preview: serves project files as a site on its own port, safely', asyn
   assert.equal(status, 403, 'DNS rebinding: foreign Host is rejected');
   await api('DELETE', `/api/projects/${p.id}`);
 });
+
+test('deleting a project stops its running program first (no "folder in use")', { timeout: 30_000 }, async () => {
+  const code = 'setInterval(() => console.log("tick"), 200);\n';
+  const p = (await api('POST', '/api/projects', { name: 'busy', files: [{ name: 'loop.js', content: code, isEntry: true }] })).data;
+  // Same files as on disk: the program runs inside the project folder
+  const { data } = await api('POST', '/api/run/start', {
+    language: 'javascript',
+    code,
+    files: [{ name: 'loop.js', content: code }],
+    entry: 'loop.js',
+    projectId: p.id,
+  });
+  const session = readSession(data.runId);
+  await new Promise((r) => setTimeout(r, 800)); // it is running now
+  const del = await api('DELETE', `/api/projects/${p.id}`);
+  assert.equal(del.status, 200, JSON.stringify(del.data));
+  const { exit } = await session;
+  assert.equal(exit.reason, 'stopped');
+  assert.equal((await api('GET', `/api/projects/${p.id}`)).status, 404);
+});

@@ -5,6 +5,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { closeProjectTerminals } from './terminal.ts';
 import { stopProjectKernels } from './notebook.ts';
+import { stopProjectRuns } from './run.ts';
 import { ENV_FILE, ENV_KEY, BAD_ARG_CHARS, readProjectEnv, readRunArgs, formatEnv, splitArgs } from './runconfig.ts';
 
 // User projects live on disk: projects/<id>/ holds the real files plus a meta file,
@@ -571,6 +572,7 @@ projectsRouter.delete('/:id', async (req, res) => {
     const meta = readMeta(req.params.id); // 404 if it is not a project folder
     await closeProjectTerminals(req.params.id);
     stopProjectKernels(req.params.id); // a notebook kernel would otherwise hold the folder open
+    await stopProjectRuns(req.params.id); // so would a running program, debugger, tests or build
     closeWatchers(req.params.id);
     const trashId = `${meta.id}~${Date.now()}`;
     fs.mkdirSync(TRASH_DIR, { recursive: true });
