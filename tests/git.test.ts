@@ -187,3 +187,66 @@ test('git: branches — create, switch (not with changes), delete only merged; f
   assert.equal((await api('GET', `${g}/file-log?path=..%2Fx`)).status, 400);
   await api('DELETE', `/api/projects/${p.id}`);
 });
+
+test('git: merge — clean merge, conflict with both sides shown, abort, resolve and commit', { skip: !hasGit && 'git not installed' }, async () => {
+  const p = (await api('POST', '/api/projects', { name: 'merge', files: [{ name: 'app.py', content: 'v = 1\n', isEntry: true }] })).data;
+  const g = `/api/git/${p.id}`;
+  const dir = path.join(tmp, 'projects', p.id);
+  const file = path.join(dir, 'app.py');
+  await api('POST', `${g}/init`);
+  await api('POST', `${g}/identity`, { name: 'Test User', email: 'test@example.com' });
+  await api('POST', `${g}/commit`, { message: 'first' });
+  const main = (await api('GET', `${g}/branches`)).data.current;
+
+  // Two branches change the same line
+  await api('POST', `${g}/branches`, { name: 'feature' });
+  fs.writeFileSync(file, 'v = 2\n');
+  await api('POST', `${g}/commit`, { message: 'feature: two' });
+  await api('POST', `${g}/switch`, { name: main });
+  fs.writeFileSync(file, 'v = 3\n');
+  await api('POST', `${g}/commit`, { message: 'main: three' });
+
+  // Refusals
+  assert.equal((await api('POST', `${g}/merge`, { name: main })).status, 400);
+  fs.writeFileSync(file, 'v = 99\n');
+  assert.equal((await api('POST', `${g}/merge`, { name: 'feature' })).status, 409);
+  await api('POST', `${g}/discard`, { path: 'app.py' });
+
+  // Conflict: the merge stays open and both sides can be seen
+  let r = (await api('POST', `${g}/merge`, { name: 'feature' })).data;
+  assert.equal(r.merged, false);
+  assert.equal(r.merging, true);
+  assert.equal(r.mergeBranch, 'feature');
+  assert.deepEqual(r.conflicts, ['app.py']);
+  const sides = (await api('GET', `${g}/conflict?path=app.py`)).data;
+  assert.equal(sides.ours, 'v = 3\n');
+  assert.equal(sides.theirs, 'v = 2\n');
+  // The file still has conflict markers: cannot be marked as resolved by hand
+  assert.equal((await api('POST', `${g}/conflict/resolve`, { path: 'app.py', take: 'edited' })).status, 409);
+
+  // Abort: back to how it was
+  r = (await api('POST', `${g}/merge/abort`)).data;
+  assert.equal(r.merging, false);
+  assert.equal(fs.readFileSync(file, 'utf-8'), 'v = 3\n');
+
+  // Again, take the branch's version, then commit to finish the merge
+  await api('POST', `${g}/merge`, { name: 'feature' });
+  r = (await api('POST', `${g}/conflict/resolve`, { path: 'app.py', take: 'theirs' })).data;
+  assert.equal(fs.readFileSync(file, 'utf-8'), 'v = 2\n');
+  assert.ok(!r.files.some((f: any) => f.status === 'U'));
+  r = (await api('POST', `${g}/commit`, { message: "Merge branch 'feature'" })).data;
+  assert.equal(r.merging, false);
+  const log = (await api('GET', `${g}/log`)).data.commits;
+  assert.equal(log[0].subject, "Merge branch 'feature'");
+
+  // A merge without conflicts finishes at once
+  await api('POST', `${g}/branches`, { name: 'docs' });
+  fs.writeFileSync(path.join(dir, 'README.md'), '# Docs\n');
+  await api('POST', `${g}/commit`, { message: 'docs' });
+  await api('POST', `${g}/switch`, { name: main });
+  r = (await api('POST', `${g}/merge`, { name: 'docs' })).data;
+  assert.equal(r.merged, true);
+  assert.ok(fs.existsSync(path.join(dir, 'README.md')));
+  assert.equal((await api('POST', `${g}/merge/abort`)).status, 409);
+  await api('DELETE', `/api/projects/${p.id}`);
+});

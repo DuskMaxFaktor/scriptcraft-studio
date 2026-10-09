@@ -400,6 +400,51 @@ test('git panel: create a branch, commit on it, file history, switch back', asyn
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('v1', { timeout: 10000 });
 });
 
+test('git panel: merge a branch with a conflict — compare, take theirs, finish', async ({ page, request }) => {
+  test.skip(spawnSync('git', ['--version']).status !== 0, 'git not installed');
+  const project = await openStudio(page, request, 'Слияние', [{ name: 'main.py', content: 'print("v1")', isEntry: true }]);
+  const g = `/api/git/${project.id}`;
+  await request.post(`${g}/init`);
+  await request.post(`${g}/identity`, { data: { name: 'UI Test', email: 'ui@example.com' } });
+  await request.post(`${g}/commit`, { data: { message: 'start' } });
+  const main = (await (await request.get(`${g}/branches`)).json()).current as string;
+  const editor = page.locator('.monaco-editor').first();
+  const lines = page.locator('.monaco-editor .view-lines').first();
+  const typeAndCommit = async (text: string, message: string) => {
+    await editor.click();
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type(text, { delay: 20 });
+    await expect.poll(() => projectFile(request, project.id, 'main.py')).toBe(text);
+    await request.post(`${g}/commit`, { data: { message } });
+  };
+
+  // The same line changed on two branches
+  await request.post(`${g}/branches`, { data: { name: 'feature' } });
+  await typeAndCommit('print("feature")', 'feature change');
+  await request.post(`${g}/switch`, { data: { name: main } });
+  await expect(lines).toContainText('v1', { timeout: 10000 });
+  await typeAndCommit('print("main")', 'main change');
+
+  await page.keyboard.press('Control+Shift+G');
+  page.once('dialog', (d) => d.accept());
+  await page.locator('[data-git-branch="feature"] [data-git-merge]').click();
+  const banner = page.locator('[data-git-merge-banner]');
+  await expect(banner.locator('[data-git-conflict="main.py"]')).toBeVisible();
+
+  // Compare both sides
+  await banner.locator('[data-git-conflict-compare]').click();
+  await expect(page.locator('.monaco-diff-editor')).toContainText('"main"');
+  await expect(page.locator('.monaco-diff-editor')).toContainText('"feature"');
+  await page.mouse.click(5, 5);
+
+  // Take the branch's version, then finish the merge
+  await banner.locator('[data-git-take="theirs"]').click();
+  await banner.locator('[data-git-finish-merge]').click();
+  await expect(banner).toHaveCount(0);
+  await expect(page.locator('[data-git-commit]').first()).toContainText("Merge branch 'feature'");
+  await expect(lines).toContainText('feature', { timeout: 10000 });
+});
+
 test('template gallery: a starter project opens on its README and runs', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
   await openStudio(page, request, 'Шаблоны', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);

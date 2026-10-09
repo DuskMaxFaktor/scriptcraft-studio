@@ -133,7 +133,17 @@ async function readStatus(dir: string) {
   const name = (await git(dir, ['config', 'user.name'])).stdout.trim();
   const email = (await git(dir, ['config', 'user.email'])).stdout.trim();
   const hasCommits = (await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0;
-  return { available: true, repo: true, ...parseStatus(raw), remote, identity: !!(name && email), hasCommits };
+  // An unfinished merge (conflicts to resolve): which branch is being merged in
+  const merging = fs.existsSync(path.join(dir, '.git', 'MERGE_HEAD'));
+  let mergeBranch: string | null = null;
+  if (merging) {
+    try {
+      mergeBranch = /Merge branch '([^']+)'/.exec(fs.readFileSync(path.join(dir, '.git', 'MERGE_MSG'), 'utf-8'))?.[1] || null;
+    } catch {
+      // no message file
+    }
+  }
+  return { available: true, repo: true, ...parseStatus(raw), remote, identity: !!(name && email), hasCommits, merging, mergeBranch };
 }
 
 const wrap =
@@ -325,6 +335,86 @@ gitRouter.post(
       throw new GitError(409, unmerged ? `Branch "${name}" has commits that are not merged anywhere — merge it first` : r.stderr.trim() || 'Cannot delete the branch');
     }
     return { ok: true };
+  })
+);
+
+// ---------- merging ----------
+
+/**
+ * Merge another branch into the current one. Refused with uncommitted changes. On conflicts the merge
+ * stays open (status.merging): resolve each file, then commit — or abort.
+ */
+gitRouter.post(
+  '/:id/merge',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    if (!isRepo(dir)) throw new GitError(409, 'Not a git repository');
+    const name = await checkBranchName(dir, req.body?.name);
+    const current = (await git(dir, ['branch', '--show-current'])).stdout.trim();
+    if (name === current) throw new GitError(400, 'A branch cannot be merged into itself');
+    const before = await readStatus(dir);
+    if ('merging' in before && before.merging) throw new GitError(409, 'Another merge is not finished yet');
+    if ('files' in before && before.files && before.files.length > 0) throw new GitError(409, 'Commit or discard your changes before merging');
+    const r = await git(dir, ['merge', '--no-edit', name]);
+    const status = await readStatus(dir);
+    if (r.code === 0) return { ...status, merged: true, upToDate: /Already up to date/i.test(r.stdout) };
+    if ('merging' in status && status.merging) return { ...status, merged: false, conflicts: (status.files || []).filter((f) => f.status === 'U').map((f) => f.path) };
+    throw new GitError(409, r.stderr.trim() || r.stdout.trim() || 'Merge failed');
+  })
+);
+
+gitRouter.post(
+  '/:id/merge/abort',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    if (!fs.existsSync(path.join(dir, '.git', 'MERGE_HEAD'))) throw new GitError(409, 'No merge in progress');
+    await gitOk(dir, ['merge', '--abort']);
+    return readStatus(dir);
+  })
+);
+
+/** Both sides of a conflicted file: "mine" (the current branch) and "theirs" (the branch being merged). */
+gitRouter.get(
+  '/:id/conflict',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    const file = safePath(dir, req.query.path);
+    const side = async (n: 2 | 3) => {
+      const r = await git(dir, ['show', `:${n}:${file}`]);
+      return r.code === 0 ? r.stdout : null; // null: the file was deleted on that side
+    };
+    return { path: file, ours: await side(2), theirs: await side(3) };
+  })
+);
+
+/**
+ * Resolve one conflicted file: keep mine, take theirs, or mark my manual edit as resolved
+ * (refused while conflict markers are still in the file).
+ */
+gitRouter.post(
+  '/:id/conflict/resolve',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    const file = safePath(dir, req.body?.path);
+    const take = String(req.body?.take || '');
+    if (!['ours', 'theirs', 'edited'].includes(take)) throw new GitError(400, 'Choose ours, theirs or edited');
+    if (take === 'edited') {
+      const abs = path.join(dir, file);
+      if (fs.existsSync(abs) && /^(<{7}|>{7}|={7})( |$)/m.test(fs.readFileSync(abs, 'utf-8'))) {
+        throw new GitError(409, 'The file still has conflict markers (<<<<<<< ======= >>>>>>>)');
+      }
+      await gitOk(dir, ['add', '--', file]);
+      return readStatus(dir);
+    }
+    // The chosen side may have deleted the file: then resolving means deleting it
+    const exists = (await git(dir, ['show', `:${take === 'ours' ? 2 : 3}:${file}`])).code === 0;
+    if (exists) {
+      await gitOk(dir, ['checkout', `--${take}`, '--', file]);
+      await gitOk(dir, ['add', '--', file]);
+    } else {
+      await gitOk(dir, ['rm', '--quiet', '--', file]);
+    }
+    return readStatus(dir);
   })
 );
 

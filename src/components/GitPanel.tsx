@@ -13,6 +13,7 @@ import {
   ChevronDown,
   Link2,
   History,
+  GitMerge,
 } from 'lucide-react';
 import { FileItem } from '../types.ts';
 import { useI18n } from '../i18n.ts';
@@ -38,6 +39,9 @@ interface GitStatus {
   identity?: boolean;
   hasCommits?: boolean;
   output?: string;
+  /** An unfinished merge: resolve the conflicts, then commit — or abort */
+  merging?: boolean;
+  mergeBranch?: string | null;
 }
 
 interface Commit {
@@ -102,7 +106,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
   const [expanded, setExpanded] = useState<Record<string, GitFile[] | 'loading'>>({});
   const [remoteUrl, setRemoteUrl] = useState('');
   const [identity, setIdentity] = useState({ name: '', email: '' });
-  const [diff, setDiff] = useState<{ path: string; original: string; modified: string } | null>(null);
+  const [diff, setDiff] = useState<{ path: string; original: string; modified: string; title?: string } | null>(null);
   const [showHistory, setShowHistory] = useState(true);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [showBranches, setShowBranches] = useState(true);
@@ -168,6 +172,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
   };
 
   const changed = status?.files || [];
+  const conflicts = changed.filter((f) => f.status === 'U');
   const selected = changed.filter((f) => !unchecked.has(f.path));
 
   const commit = () => {
@@ -227,6 +232,33 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
     run(`delete:${name}`, async () => {
       await call(`${base}/branches/delete`, { name });
     });
+  };
+
+  const mergeBranch = (name: string) => {
+    if (!confirm(t('git.confirmMerge', { name, into: status?.branch || '' }))) return;
+    run(`merge:${name}`, () => call<GitStatus & { merged?: boolean; upToDate?: boolean; conflicts?: string[] }>(`${base}/merge`, { name }), (s) => {
+      const r = s as GitStatus & { merged?: boolean; upToDate?: boolean; conflicts?: string[] };
+      if (r.merged) onLog('success', r.upToDate ? t('git.mergeUpToDate', { name }) : t('git.merged', { name }));
+      else onLog('error', t('git.mergeConflicts', { name, count: r.conflicts?.length || 0 }));
+    });
+  };
+  const resolveConflict = (file: string, take: 'ours' | 'theirs' | 'edited') =>
+    run(`resolve:${file}`, () => call(`${base}/conflict/resolve`, { path: file, take }));
+  const compareConflict = async (file: string) => {
+    try {
+      const r = await call<{ path: string; ours: string | null; theirs: string | null }>(`${base}/conflict?path=${encodeURIComponent(file)}`);
+      setDiff({ path: file, original: r.ours ?? '', modified: r.theirs ?? '', title: t('git.conflictTitle', { name: file, branch: status?.mergeBranch || '' }) });
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+  const finishMerge = () =>
+    run('commit', () => call(`${base}/commit`, { message: status?.mergeBranch ? `Merge branch '${status.mergeBranch}'` : 'Merge' }), () =>
+      onLog('success', t('git.mergeFinished', { name: status?.mergeBranch || '' }))
+    );
+  const abortMerge = () => {
+    if (!confirm(t('git.confirmAbortMerge'))) return;
+    run('abort', () => call(`${base}/merge/abort`, {}));
   };
 
   /** What one commit changed in one file. */
@@ -328,7 +360,56 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
           </div>
         )}
 
+        {status.merging && (
+          <div className="p-2 border-b border-slate-800 space-y-1.5 bg-amber-500/5" data-git-merge-banner>
+            <div className="text-[11px] text-amber-300 font-semibold">
+              {t('git.mergingTitle', { name: status.mergeBranch || '?', into: status.branch || '' })}
+            </div>
+            {conflicts.length > 0 ? (
+              <>
+                <p className="text-[11px] text-slate-400 leading-snug">{t('git.conflictsHint', { count: conflicts.length })}</p>
+                {conflicts.map((f) => (
+                  <div key={f.path} className="rounded border border-fuchsia-500/30 bg-fuchsia-500/5 p-1.5 space-y-1" data-git-conflict={f.path}>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      {statusBadge('U')}
+                      <span className="font-mono text-slate-200 truncate flex-1">{f.path}</span>
+                      <button onClick={() => compareConflict(f.path)} className="text-[10px] text-indigo-300 hover:underline shrink-0" data-git-conflict-compare>
+                        {t('git.compare')}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      <button onClick={() => resolveConflict(f.path, 'ours')} disabled={!!busy} className="px-1.5 py-0.5 rounded text-[10px] border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-40" data-git-take="ours">
+                        {t('git.takeOurs')}
+                      </button>
+                      <button onClick={() => resolveConflict(f.path, 'theirs')} disabled={!!busy} className="px-1.5 py-0.5 rounded text-[10px] border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-40" data-git-take="theirs">
+                        {t('git.takeTheirs', { name: status.mergeBranch || '' })}
+                      </button>
+                      <button onClick={() => resolveConflict(f.path, 'edited')} disabled={!!busy} className="px-1.5 py-0.5 rounded text-[10px] border border-slate-700 text-slate-200 hover:bg-slate-700 disabled:opacity-40" title={t('git.markResolvedTitle')} data-git-take="edited">
+                        {t('git.markResolved')}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <button
+                onClick={finishMerge}
+                disabled={!!busy || !status.identity}
+                data-git-finish-merge
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold"
+              >
+                {busy === 'commit' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitMerge className="w-3.5 h-3.5" />}
+                {t('git.finishMerge')}
+              </button>
+            )}
+            <button onClick={abortMerge} disabled={!!busy} className="text-[10px] text-slate-400 hover:text-red-300" data-git-abort-merge>
+              {t('git.abortMerge')}
+            </button>
+          </div>
+        )}
+
         {/* Commit */}
+        {!status.merging && (
         <div className="p-2 border-b border-slate-800 space-y-1.5">
           <textarea
             value={message}
@@ -353,6 +434,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
             {t('git.commit', { count: selected.length })}
           </button>
         </div>
+        )}
 
         {/* Changes */}
         <div className="py-1">
@@ -440,6 +522,15 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
                           title={t('git.switchTitle')}
                         >
                           {busy === `switch:${b.name}` ? <Loader2 className="w-3 h-3 animate-spin" /> : t('git.switch')}
+                        </button>
+                        <button
+                          onClick={() => mergeBranch(b.name)}
+                          disabled={!!busy || !!status.merging}
+                          data-git-merge
+                          className="px-1.5 py-0.5 rounded text-[10px] border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 shrink-0"
+                          title={t('git.mergeTitle', { name: b.name, into: status.branch || '' })}
+                        >
+                          {busy === `merge:${b.name}` ? <Loader2 className="w-3 h-3 animate-spin" /> : t('git.merge')}
                         </button>
                         <button
                           onClick={() => deleteBranch(b.name)}
@@ -640,7 +731,7 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="px-4 py-2.5 flex items-center justify-between border-b border-slate-800">
-              <span className="text-sm font-semibold text-fg truncate">{t('git.diffTitle', { name: diff.path })}</span>
+              <span className="text-sm font-semibold text-fg truncate">{diff.title ?? t('git.diffTitle', { name: diff.path })}</span>
               <button onClick={() => setDiff(null)} className="p-1 rounded text-slate-400 hover:text-fg hover:bg-slate-800">
                 <X className="w-4 h-4" />
               </button>
