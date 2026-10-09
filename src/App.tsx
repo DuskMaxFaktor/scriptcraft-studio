@@ -52,6 +52,12 @@ export default function App() {
   const [splitFileId, setSplitFileId] = useState<string | null>(null);
   const [splitWidth, setSplitWidth] = usePersistentSize('scriptcraft-split-width', 520);
   const [isHotkeysOpen, setIsHotkeysOpen] = useState(false);
+  const [isAboutOpen, setIsAboutOpen] = useState(false);
+  // Quiet daily look for a new version
+  useEffect(() => {
+    const timer = setTimeout(() => import('./updates.ts').then((u) => u.autoCheckForUpdates()), 4000);
+    return () => clearTimeout(timer);
+  }, []);
   const [isSnippetsOpen, setIsSnippetsOpen] = useState(false);
   const [isAppsOpen, setIsAppsOpen] = useState(false);
   const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
@@ -1147,6 +1153,7 @@ export default function App() {
         onOpenProjects={() => setIsProjectsOpen(true)}
         runTargetName={runTarget?.name || null}
         onShowHotkeys={() => setIsHotkeysOpen(true)}
+        onOpenAbout={() => setIsAboutOpen(true)}
         onOpenAiSettings={() => setIsAiSettingsOpen(true)}
       />
 
@@ -1351,6 +1358,9 @@ export default function App() {
       <Deferred when={isSnippetsOpen}>
       <SnippetsModal isOpen={isSnippetsOpen} onClose={() => setIsSnippetsOpen(false)} />
       </Deferred>
+      <Deferred when={isAboutOpen}>
+        <AboutModal isOpen={isAboutOpen} onClose={() => setIsAboutOpen(false)} />
+      </Deferred>
       <Deferred when={isHotkeysOpen}>
       <HotkeysModal isOpen={isHotkeysOpen} onClose={() => setIsHotkeysOpen(false)} />
       </Deferred>
@@ -1416,6 +1426,7 @@ const ProjectsModal = lazyNamed(() => import('./components/ProjectsModal.tsx'), 
 const PackagesModal = lazyNamed(() => import('./components/PackagesModal.tsx'), 'PackagesModal');
 const HistoryModal = lazyNamed(() => import('./components/HistoryModal.tsx'), 'HistoryModal');
 const HotkeysModal = lazyNamed(() => import('./components/HotkeysModal.tsx'), 'HotkeysModal');
+const AboutModal = lazyNamed(() => import('./components/AboutModal.tsx'), 'AboutModal');
 const SnippetsModal = lazyNamed(() => import('./components/SnippetsModal.tsx'), 'SnippetsModal');
 const AppsModal = lazyNamed(() => import('./components/AppsModal.tsx'), 'AppsModal');
 const AiSettingsModal = lazyNamed(() => import('./components/AiSettingsModal.tsx'), 'AiSettingsModal');

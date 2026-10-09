@@ -21,6 +21,7 @@ import { localOnlyGuard } from './security.ts';
 import { terminalRouter } from './terminal.ts';
 import { debugRouter } from './debug.ts';
 import { getPreviewPort } from './preview.ts';
+import { updateRouter } from './update.ts';
 
 export const apiRouter = Router();
 
@@ -28,6 +29,7 @@ export const apiRouter = Router();
 apiRouter.use(localOnlyGuard);
 
 apiRouter.use('/settings', settingsRouter);
+apiRouter.use('/update', updateRouter);
 apiRouter.use('/terminal', terminalRouter);
 apiRouter.use('/debug', debugRouter);
 apiRouter.use('/projects/:id/packages', packagesRouter);

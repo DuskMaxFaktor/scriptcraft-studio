@@ -13,6 +13,8 @@ export interface AiSettings {
   custom: { enabled: boolean; name: string; baseUrl: string; apiKey: string; models: string[] };
   /** Daily backups of all projects; dir '' = Documents\ScriptCraft Studio Backups */
   backups: { enabled: boolean; keep: number; dir: string };
+  /** Updates: GitHub repository "owner/name" whose releases carry ScriptCraftStudio-Setup.exe; '' = off */
+  update: { repo: string; autoCheck: boolean };
 }
 
 const SETTINGS_FILE = path.join(process.cwd(), 'settings.json');
@@ -23,6 +25,7 @@ const DEFAULTS: AiSettings = {
   completion: { enabled: false, model: '' },
   custom: { enabled: false, name: 'My server', baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', models: [] },
   backups: { enabled: true, keep: 7, dir: '' },
+  update: { repo: '', autoCheck: true },
 };
 
 export function readSettings(): AiSettings {
@@ -33,6 +36,7 @@ export function readSettings(): AiSettings {
       completion: { ...DEFAULTS.completion, ...(raw.completion || {}) },
       custom: { ...DEFAULTS.custom, ...(raw.custom || {}) },
       backups: { ...DEFAULTS.backups, ...(raw.backups || {}) },
+      update: { ...DEFAULTS.update, ...(raw.update || {}) },
     };
   } catch {
     return structuredClone(DEFAULTS);

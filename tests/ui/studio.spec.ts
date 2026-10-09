@@ -619,6 +619,42 @@ test('keyboard shortcuts can be changed: a studio command and an editor command,
   expect(await page.evaluate(() => localStorage.getItem('scriptcraft-keybindings'))).toBeNull();
 });
 
+test('about window: a new version is found, the header shows a dot, the update starts after confirmation', async ({ page, request }) => {
+  let installCalls = 0;
+  await page.route('**/api/update/check', (route) =>
+    route.fulfill({
+      json: { current: '1.1.0', latest: '1.2.0', available: true, name: 'v1.2.0', notes: '- быстрее', page: 'https://github.com/me/studio/releases', published: '', canInstall: true, size: 270 * 1024 * 1024 },
+    })
+  );
+  await page.route('**/api/update/install', (route) => {
+    installCalls++;
+    return route.fulfill({ json: { ok: true, version: '1.2.0' } });
+  });
+  await openStudio(page, request, 'Обновления', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.locator('[data-open-about]').click();
+  const about = page.locator('[data-about]');
+  await expect(about.locator('[data-about-version]')).toContainText('Версия');
+  // A bad repository name is refused by the server
+  await about.locator('[data-update-repo]').fill('просто текст');
+  await about.locator('[data-update-check]').click();
+  await expect(about).toContainText('owner/name');
+  await about.locator('[data-update-repo]').fill('https://github.com/me/studio');
+  await about.locator('[data-update-check]').click();
+  await expect(about.locator('[data-update-repo]')).toHaveValue('me/studio');
+  await expect(about.locator('[data-update-available]')).toContainText('Новая версия 1.2.0');
+  await expect(about.locator('[data-update-available]')).toContainText('быстрее');
+  await expect(page.locator('[data-update-dot]')).toBeVisible();
+
+  // Cancel in the confirmation: nothing happens
+  await about.locator('[data-update-install]').click();
+  await page.locator('[data-dialog-cancel]').click();
+  expect(installCalls).toBe(0);
+  await about.locator('[data-update-install]').click();
+  await page.locator('[data-dialog-ok]').click();
+  await expect(about.locator('[data-update-installing]')).toBeVisible();
+  expect(installCalls).toBe(1);
+});
+
 test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
   test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
   await openStudio(page, request, 'Покрытие', [

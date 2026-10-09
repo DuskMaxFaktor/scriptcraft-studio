@@ -20,11 +20,13 @@ import {
   SlidersHorizontal,
   Braces,
   AppWindow,
+  Info,
 } from 'lucide-react';
 import { Cpu as CpuIcon } from 'lucide-react';
 import { FileItem } from '../types.ts';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
+import { useUpdateInfo } from '../updates.ts';
 
 interface HeaderProps {
   activeFile: FileItem | null;
@@ -35,6 +37,7 @@ interface HeaderProps {
   /** File that "Run" will execute (the ★ main file, or the active one) */
   runTargetName: string | null;
   onShowHotkeys: () => void;
+  onOpenAbout: () => void;
   /** Start debugging the run target (Python / JavaScript) */
   onDebug: () => void;
   canDebug: boolean;
@@ -60,6 +63,7 @@ export const Header: React.FC<HeaderProps> = ({
   onStop,
   runTargetName,
   onShowHotkeys,
+  onOpenAbout,
   onDebug,
   canDebug,
   onOpenAiSettings,
@@ -76,6 +80,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [showExportMenu, setShowExportMenu] = useState(false);
   const { lang, setLang, t } = useI18n();
   const { theme, toggleTheme } = useTheme();
+  const update = useUpdateInfo();
 
   const handleDownloadFullApp = () => {
     setShowExportMenu(false);
@@ -209,6 +214,17 @@ export const Header: React.FC<HeaderProps> = ({
           title={t('hotkeys.title')}
         >
           <Keyboard className="w-3.5 h-3.5" />
+        </button>
+
+        {/* About: version, updates (a dot when a new version is out) */}
+        <button
+          onClick={onOpenAbout}
+          className="relative p-1.5 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-300 hover:text-fg transition-colors"
+          title={update?.available ? t('about.availableShort', { version: update.latest }) : t('about.title')}
+          data-open-about
+        >
+          <Info className="w-3.5 h-3.5" />
+          {update?.available && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[var(--color-bg,#11131a)]" data-update-dot />}
         </button>
 
         {/* Theme Switcher */}
