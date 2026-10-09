@@ -158,6 +158,93 @@ export async function lintPython(name: string, code: string, cwd: string): Promi
   }));
 }
 
+// ---------- JavaScript checks (ESLint) ----------
+// TypeScript is checked by the editor's own TypeScript service; ESLint covers plain JavaScript, which had no checks.
+
+export const ESLINT_EXT = new Set(['js', 'mjs', 'cjs', 'jsx']);
+const PROJECT_ESLINT_CONFIGS = ['eslint.config.js', 'eslint.config.mjs', 'eslint.config.cjs'];
+
+/** An ESLint instance: the project's own eslint.config.* if it has one, otherwise sensible built-in rules. */
+async function makeEslint(name: string, code: string, cwd: string, fix: boolean) {
+  const { ESLint } = await import('eslint');
+  if (PROJECT_ESLINT_CONFIGS.some((f) => fs.existsSync(path.join(cwd, f)))) {
+    return { eslint: new ESLint({ cwd, fix }), own: true };
+  }
+  const js = (await import('@eslint/js')).default;
+  const globals = (await import('globals')).default;
+  const ext = extOf(name);
+  // ES modules if the file says so; otherwise a classic Node script (require / module.exports)
+  const sourceType = ext === 'mjs' || (ext !== 'cjs' && /^\s*(import|export)\s/m.test(code)) ? 'module' : 'commonjs';
+  const eslint = new ESLint({
+    cwd,
+    fix,
+    overrideConfigFile: true,
+    overrideConfig: [
+      js.configs.recommended,
+      {
+        files: ['**/*.js', '**/*.mjs', '**/*.cjs', '**/*.jsx'],
+        languageOptions: {
+          ecmaVersion: 'latest',
+          sourceType,
+          globals: { ...globals.browser, ...globals.node },
+          parserOptions: { ecmaFeatures: { jsx: true } },
+        },
+        // Hints, not errors: unused things and empty blocks do not break a program
+        rules: { 'no-unused-vars': 'warn', 'no-empty': 'warn', 'no-useless-assignment': 'warn' },
+      },
+    ],
+  });
+  return { eslint, own: false };
+}
+
+/** Line/column (1-based) of an offset in the text. */
+function posOf(code: string, offset: number) {
+  let line = 1;
+  let last = -1;
+  for (let i = 0; i < offset && i < code.length; i++) {
+    if (code.charCodeAt(i) === 10) {
+      line++;
+      last = i;
+    }
+  }
+  return { line, column: offset - last };
+}
+
+export async function lintJavaScript(name: string, code: string, cwd: string): Promise<Diagnostic[]> {
+  const { eslint } = await makeEslint(name, code, cwd, false);
+  const [result] = await eslint.lintText(code, { filePath: path.join(cwd, name) });
+  if (!result) return [];
+  return result.messages
+    .filter((m) => !m.fatal) // syntax errors: the editor already underlines them
+    .map((m) => {
+      const fix = m.fix
+        ? (() => {
+            const a = posOf(code, m.fix.range[0]);
+            const b = posOf(code, m.fix.range[1]);
+            return { message: `Fix: ${m.ruleId}`, edits: [{ line: a.line, column: a.column, endLine: b.line, endColumn: b.column, text: m.fix.text }] };
+          })()
+        : undefined;
+      return {
+        line: m.line || 1,
+        column: m.column || 1,
+        endLine: m.endLine || m.line || 1,
+        endColumn: m.endColumn || m.column || 1,
+        severity: m.severity === 2 ? 'error' : 'warning',
+        code: m.ruleId || 'eslint',
+        message: m.message,
+        url: m.ruleId && !m.ruleId.includes('/') ? `https://eslint.org/docs/latest/rules/${m.ruleId}` : undefined,
+        fix,
+      } as Diagnostic;
+    });
+}
+
+/** Apply every ESLint auto-fix. */
+export async function fixJavaScript(name: string, code: string, cwd: string): Promise<string> {
+  const { eslint } = await makeEslint(name, code, cwd, true);
+  const [result] = await eslint.lintText(code, { filePath: path.join(cwd, name) });
+  return result?.output ?? code;
+}
+
 const wrap =
   (fn: (req: any) => Promise<unknown>) =>
   async (req: any, res: any) => {
@@ -178,7 +265,7 @@ codeToolsRouter.get(
     const ruff = findRuff();
     let ruffVersion: string | null = null;
     if (ruff) ruffVersion = spawnSync(ruff, ['--version'], { encoding: 'utf-8', windowsHide: true }).stdout?.trim() || null;
-    return { ruff: !!ruff, ruffVersion, prettier: true, jedi: hasJedi() };
+    return { ruff: !!ruff, ruffVersion, prettier: true, jedi: hasJedi(), eslint: true };
   })
 );
 
@@ -219,6 +306,7 @@ codeToolsRouter.post(
   wrap(async (req) => {
     const { name, code, cwd } = input(req);
     const ext = extOf(name);
+    if (ESLINT_EXT.has(ext)) return { diagnostics: await lintJavaScript(name, code, cwd) };
     if (ext !== 'py' && ext !== 'pyi') return { diagnostics: [] };
     return { diagnostics: await lintPython(name, code, cwd) };
   })
@@ -229,6 +317,7 @@ codeToolsRouter.post(
   '/fix',
   wrap(async (req) => {
     const { name, code, cwd } = input(req);
+    if (ESLINT_EXT.has(extOf(name))) return { code: await fixJavaScript(name, code, cwd) };
     const r = await runTool(requireRuff(), ['check', '--fix', '--exit-zero', '--no-cache', '--quiet', '--stdin-filename', name, '-'], code, cwd);
     if (r.code !== 0) throw new ToolError(422, ruffSyntaxError(r.stderr) || 'ruff --fix failed');
     return { code: r.stdout };

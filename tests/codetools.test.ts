@@ -63,7 +63,7 @@ test('format: unknown types and unsafe names are rejected', async () => {
   assert.equal((await api('POST', '/api/code/format', { name: '../../a.js', code: 'x' })).status, 400);
   assert.equal((await api('POST', '/api/code/format', { name: 'a.js' })).status, 400);
   // Linting other languages is a no-op
-  assert.deepEqual((await api('POST', '/api/code/lint', { name: 'a.js', code: 'x' })).data, { diagnostics: [] });
+  assert.deepEqual((await api('POST', '/api/code/lint', { name: 'notes.txt', code: 'x' })).data, { diagnostics: [] });
 });
 
 test('ruff formats Python like Black', async (t) => {
@@ -92,4 +92,29 @@ test('ruff finds problems with positions and automatic fixes', async (t) => {
   // A syntax error comes back as a diagnostic
   const syntax = (await api('POST', '/api/code/lint', { name: 'main.py', code: 'def f(:\n' })).data.diagnostics;
   assert.ok(syntax.some((d: any) => d.severity === 'error'));
+});
+
+test('eslint checks JavaScript: positions, severities, quick fixes, ES modules', async () => {
+  // A classic Node script: unused import is a hint, an undefined name is an error
+  let d = (await api('POST', '/api/code/lint', { name: 'app.js', code: "const fs = require('fs');\nconsole.log(total);\n" })).data.diagnostics;
+  const unused = d.find((x: any) => x.code === 'no-unused-vars');
+  assert.equal(unused.severity, 'warning');
+  assert.deepEqual([unused.line, unused.column], [1, 7]);
+  const undef = d.find((x: any) => x.code === 'no-undef');
+  assert.equal(undef.severity, 'error');
+  assert.equal(undef.line, 2);
+  assert.match(undef.url, /eslint\.org\/docs\/latest\/rules\/no-undef/);
+
+  // ES module syntax is understood; browser globals are known
+  d = (await api('POST', '/api/code/lint', { name: 'ui.mjs', code: "import x from './x.mjs';\ndocument.title = x;\n" })).data.diagnostics;
+  assert.deepEqual(d, []);
+
+  // An auto-fixable problem carries its fix, and "fix all" applies it
+  const code = 'const ok = 1;\nif (!!ok) console.log(ok);\n';
+  d = (await api('POST', '/api/code/lint', { name: 'f.js', code })).data.diagnostics;
+  assert.ok(d.find((x: any) => x.code === 'no-extra-boolean-cast')?.fix);
+  assert.equal((await api('POST', '/api/code/fix', { name: 'f.js', code })).data.code, 'const ok = 1;\nif (ok) console.log(ok);\n');
+
+  // Syntax errors are left to the editor (no duplicate underline)
+  assert.deepEqual((await api('POST', '/api/code/lint', { name: 'bad.js', code: 'function (' })).data.diagnostics, []);
 });

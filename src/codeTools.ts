@@ -96,12 +96,14 @@ export async function finishToolInstall() {
   for (const model of monaco.editor.getModels()) if (model.getLanguageId() === 'python') scheduleLint(model);
 }
 
-// ---------- Python checks ----------
+// ---------- checks: Ruff (Python) and ESLint (JavaScript) ----------
+const LINTED = new Set(['python', 'javascript']);
+const linterOf = (model: Model) => (model.getLanguageId() === 'python' ? 'Ruff' : 'ESLint');
 const diagnosticsByModel = new Map<string, Diagnostic[]>();
 const lintTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const lintVersion = new Map<string, number>();
 
-function toMarker(d: Diagnostic): Parameters<Monaco['editor']['setModelMarkers']>[2][number] {
+function toMarker(d: Diagnostic, source = 'Ruff'): Parameters<Monaco['editor']['setModelMarkers']>[2][number] {
   const sev = d.severity === 'error' ? monaco.MarkerSeverity.Error : d.severity === 'warning' ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info;
   return {
     startLineNumber: d.line,
@@ -111,30 +113,32 @@ function toMarker(d: Diagnostic): Parameters<Monaco['editor']['setModelMarkers']
     endColumn: d.endLine === d.line && d.endColumn <= d.column ? d.column + 1 : d.endColumn,
     severity: sev,
     message: d.message,
-    source: 'Ruff',
+    source,
     code: d.url ? { value: d.code, target: monaco.Uri.parse(d.url) } : d.code,
   };
 }
 
 async function lintNow(model: Model) {
-  if (model.isDisposed() || model.getLanguageId() !== 'python' || state.ruff === false) return;
+  if (model.isDisposed() || !LINTED.has(model.getLanguageId())) return;
+  const python = model.getLanguageId() === 'python';
+  if (python && state.ruff === false) return;
   const key = model.uri.toString();
   const version = model.getVersionId();
   lintVersion.set(key, version);
   try {
     const { diagnostics } = (await post('/api/code/lint', { name: fileName(model), code: model.getValue() })) as { diagnostics: Diagnostic[] };
     if (model.isDisposed() || lintVersion.get(key) !== version) return; // an older answer
-    if (state.ruff !== true) setState({ ruff: true });
+    if (python && state.ruff !== true) setState({ ruff: true });
     diagnosticsByModel.set(key, diagnostics);
-    monaco.editor.setModelMarkers(model, OWNER, diagnostics.map(toMarker));
+    monaco.editor.setModelMarkers(model, OWNER, diagnostics.map((d) => toMarker(d, linterOf(model))));
   } catch {
     if (!model.isDisposed()) monaco.editor.setModelMarkers(model, OWNER, []);
   }
 }
 
-/** Check a Python model after a short pause in typing. */
+/** Check a Python / JavaScript model after a short pause in typing. */
 export function scheduleLint(model: Model) {
-  if (model.getLanguageId() !== 'python') return;
+  if (!LINTED.has(model.getLanguageId())) return;
   const key = model.uri.toString();
   clearTimeout(lintTimers.get(key));
   lintTimers.set(key, setTimeout(() => lintNow(model), LINT_DELAY_MS));
@@ -177,6 +181,54 @@ export function registerCodeTools() {
       },
     });
   }
+
+  // JavaScript (ESLint): quick fixes, "disable for this line", fix all
+  monaco.languages.registerCodeActionProvider('javascript', {
+    async provideCodeActions(model, range) {
+      const diagnostics = diagnosticsByModel.get(model.uri.toString()) || [];
+      const here = diagnostics.filter((d) => d.line <= range.endLineNumber && d.endLine >= range.startLineNumber);
+      const actions: any[] = [];
+      for (const d of here) {
+        const marker = toMarker(d, 'ESLint');
+        if (d.fix) {
+          actions.push({
+            title: `${t('tools.eslintFix')} (${d.code})`,
+            kind: 'quickfix',
+            diagnostics: [marker],
+            isPreferred: true,
+            edit: {
+              edits: d.fix.edits.map((e) => ({
+                resource: model.uri,
+                versionId: model.getVersionId(),
+                textEdit: { range: new monaco.Range(e.line, e.column, e.endLine, e.endColumn), text: e.text },
+              })),
+            },
+          });
+        }
+        // "// eslint-disable-next-line rule" above the line, with the same indentation
+        const line = model.getLineContent(d.line);
+        const indent = /^\s*/.exec(line)?.[0] || '';
+        actions.push({
+          title: t('tools.eslintIgnoreLine', { code: d.code }),
+          kind: 'quickfix',
+          diagnostics: [marker],
+          edit: {
+            edits: [
+              {
+                resource: model.uri,
+                versionId: model.getVersionId(),
+                textEdit: { range: new monaco.Range(d.line, 1, d.line, 1), text: `${indent}// eslint-disable-next-line ${d.code}\n` },
+              },
+            ],
+          },
+        });
+      }
+      if (diagnostics.some((d) => d.fix)) {
+        actions.push({ title: t('tools.fixAll'), kind: 'source.fixAll', command: { id: FIX_ALL_COMMAND, title: t('tools.fixAll'), arguments: [model.uri.toString()] } });
+      }
+      return { actions, dispose() {} };
+    },
+  });
 
   monaco.languages.registerCodeActionProvider('python', {
     async provideCodeActions(model, range) {
@@ -235,7 +287,7 @@ const FIX_ALL_COMMAND = 'scriptcraft.ruffFixAll';
 
 /** Apply every safe Ruff fix to the file (one undo step). */
 export async function fixAll(model: Model | null) {
-  if (!model || model.getLanguageId() !== 'python') return;
+  if (!model || !LINTED.has(model.getLanguageId())) return;
   try {
     const { code } = await post('/api/code/fix', { name: fileName(model), code: model.getValue() });
     if (code !== model.getValue()) {

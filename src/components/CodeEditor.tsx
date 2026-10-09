@@ -666,6 +666,20 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                 Ruff: {problems ? t('tools.problems', { count: problems }) : t('tools.noProblems')}
               </button>
             ) : null)}
+          {activeFile.language === 'javascript' && (
+            <button
+              data-eslint-status
+              onClick={() => {
+                editorRef.current?.focus();
+                editorRef.current?.getAction('editor.action.marker.next')?.run();
+              }}
+              className={`flex items-center gap-1 ${problems ? 'text-amber-400 hover:text-amber-300' : 'text-emerald-400'}`}
+              title={t('tools.eslintTitle')}
+            >
+              {problems ? <TriangleAlert className="w-3 h-3" /> : <CircleCheck className="w-3 h-3" />}
+              ESLint: {problems ? t('tools.problems', { count: problems }) : t('tools.noProblems')}
+            </button>
+          )}
           <span>UTF-8</span>
           <span>{activeFile.language === 'python' ? t('editor.spaces4') : t('editor.spaces')}</span>
         </div>

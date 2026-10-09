@@ -467,6 +467,22 @@ test('template gallery: a starter project opens on its README and runs', async (
   await expect(output(page)).toContainText('карта сокровищ');
 });
 
+test('javascript checks: ESLint underlines a problem and fixes it on Ctrl+.', async ({ page, request }) => {
+  const project = await openStudio(page, request, 'ESLint', [{ name: 'app.js', language: 'javascript', content: 'const ok = 1;\nif (!!ok) console.log(ok);\n', isEntry: true }]);
+  const status = page.locator('[data-eslint-status]');
+  await expect(status).toContainText('проблем: 1');
+  await expect(page.locator('.squiggly-error').first()).toBeVisible();
+
+  await page.locator('.monaco-editor').first().click();
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Control+.');
+  await page.getByText(/Исправить \(no-extra-boolean-cast\)/).first().click();
+  await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('if (ok)');
+  await expect(status).toContainText('без замечаний');
+  await expect.poll(() => projectFile(request, project.id, 'app.js')).toBe('const ok = 1;\nif (ok) console.log(ok);\n');
+});
+
 test('python checks and formatting: Ruff underlines problems, formats the file and fixes on Ctrl+.', async ({ page, request }) => {
   const tools = await (await request.get('/api/code/tools')).json();
   test.skip(!tools.ruff, 'ruff not installed');
