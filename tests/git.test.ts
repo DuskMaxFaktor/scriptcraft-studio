@@ -135,3 +135,55 @@ test('git: unsafe paths, remotes and ids are rejected', { skip: !hasGit && 'git 
   assert.equal((await api('GET', `${g}/commit/not-a-hash;rm`)).status, 400);
   await api('DELETE', `/api/projects/${p.id}`);
 });
+
+test('git: branches — create, switch (not with changes), delete only merged; file history', { skip: !hasGit && 'git not installed' }, async () => {
+  const p = (await api('POST', '/api/projects', { name: 'branches', files: [{ name: 'app.py', content: 'v = 1\n', isEntry: true }] })).data;
+  const g = `/api/git/${p.id}`;
+  const file = path.join(tmp, 'projects', p.id, 'app.py');
+  await api('POST', `${g}/init`);
+  await api('POST', `${g}/identity`, { name: 'Test User', email: 'test@example.com' });
+
+  // No branches before the first commit
+  assert.equal((await api('POST', `${g}/branches`, { name: 'feature' })).status, 409);
+  assert.equal((await api('POST', `${g}/commit`, { message: 'first' })).status, 200);
+  const main = (await api('GET', `${g}/branches`)).data.current;
+  assert.ok(main);
+
+  // Invalid names are refused
+  for (const bad of ['-x', 'a b', 'a..b', '']) assert.equal((await api('POST', `${g}/branches`, { name: bad })).status, 400, bad);
+
+  // Create + switch, commit on the branch
+  let s = (await api('POST', `${g}/branches`, { name: 'feature/fast' })).data;
+  assert.equal(s.branch, 'feature/fast');
+  fs.writeFileSync(file, 'v = 2\n');
+  await api('POST', `${g}/commit`, { message: 'faster' });
+  const list = (await api('GET', `${g}/branches`)).data;
+  assert.deepEqual(list.branches.map((b: any) => b.name).sort(), ['feature/fast', main].sort());
+  assert.equal(list.current, 'feature/fast');
+
+  // Switching with uncommitted changes is refused; after a commit it works and files follow the branch
+  fs.writeFileSync(file, 'v = 3\n');
+  assert.equal((await api('POST', `${g}/switch`, { name: main })).status, 409);
+  await api('POST', `${g}/discard`, { path: 'app.py' });
+  s = (await api('POST', `${g}/switch`, { name: main })).data;
+  assert.equal(s.branch, main);
+  assert.equal(fs.readFileSync(file, 'utf-8'), 'v = 1\n');
+
+  // An unmerged branch is not deleted; the current branch never
+  assert.equal((await api('POST', `${g}/branches/delete`, { name: 'feature/fast' })).status, 409);
+  assert.equal((await api('POST', `${g}/branches/delete`, { name: main })).status, 409);
+  // After merging (fast-forward) it can be deleted
+  spawnSync('git', ['-C', path.join(tmp, 'projects', p.id), 'merge', '--ff-only', 'feature/fast']);
+  assert.equal((await api('POST', `${g}/branches/delete`, { name: 'feature/fast' })).status, 200);
+
+  // File history and the file before/after a commit
+  const hist = (await api('GET', `${g}/file-log?path=app.py`)).data.commits;
+  assert.deepEqual(hist.map((c: any) => c.subject), ['faster', 'first']);
+  const at = (await api('GET', `${g}/file-at?path=app.py&hash=${hist[0].hash}`)).data;
+  assert.equal(at.original, 'v = 1\n');
+  assert.equal(at.modified, 'v = 2\n');
+  const first = (await api('GET', `${g}/file-at?path=app.py&hash=${hist[1].hash}`)).data;
+  assert.equal(first.original, '');
+  assert.equal((await api('GET', `${g}/file-log?path=..%2Fx`)).status, 400);
+  await api('DELETE', `/api/projects/${p.id}`);
+});

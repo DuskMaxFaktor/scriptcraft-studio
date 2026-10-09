@@ -333,6 +333,49 @@ test('git panel: create a repository, commit, see a change, view the diff, disca
   await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('v1', { timeout: 10000 });
 });
 
+test('git panel: create a branch, commit on it, file history, switch back', async ({ page, request }) => {
+  test.skip(spawnSync('git', ['--version']).status !== 0, 'git not installed');
+  const project = await openStudio(page, request, 'Ветки', [{ name: 'main.py', content: 'print("v1")', isEntry: true }]);
+  const g = `/api/git/${project.id}`;
+  await request.post(`${g}/init`);
+  await request.post(`${g}/identity`, { data: { name: 'UI Test', email: 'ui@example.com' } });
+  await request.post(`${g}/commit`, { data: { message: 'Первая версия' } });
+  const main = (await (await request.get(`${g}/branches`)).json()).current as string;
+
+  await page.keyboard.press('Control+Shift+G');
+  const branches = page.locator('[data-git-branches]');
+  await expect(branches.locator(`[data-git-branch="${main}"]`)).toContainText('текущая');
+
+  // Create a branch: it becomes the current one
+  await branches.locator('[data-git-new-branch]').fill('feature');
+  await branches.locator('[data-git-create-branch]').click();
+  await expect(branches.locator('[data-git-branch="feature"]')).toContainText('текущая');
+
+  // Commit a change on the branch
+  await page.locator('.monaco-editor').first().click();
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('print("v2")', { delay: 20 });
+  await expect(page.locator('[data-git-file="main.py"]')).toBeVisible({ timeout: 10000 });
+  await page.getByPlaceholder(/Описание коммита/).fill('Вторая версия');
+  await page.getByRole('button', { name: /Коммит \(1\)/ }).click();
+  await expect(page.getByText('Нет изменений с последнего коммита')).toBeVisible();
+
+  // History: open the commit, see what it changed in main.py, then that file's own history
+  await page.locator('[data-git-commit]', { hasText: 'Вторая версия' }).click();
+  const fileRow = page.locator('[data-git-commit-file="main.py"]').first();
+  await fileRow.click();
+  await expect(page.locator('.monaco-diff-editor')).toContainText('v2');
+  await page.mouse.click(5, 5);
+  await fileRow.hover();
+  await fileRow.locator('[data-git-file-history-btn]').click();
+  await expect(page.locator('[data-git-file-history]')).toContainText('main.py (2)');
+
+  // Switch back: the editor shows the file as it is on that branch
+  await branches.locator(`[data-git-branch="${main}"] [data-git-switch]`).click();
+  await expect(branches.locator(`[data-git-branch="${main}"]`)).toContainText('текущая');
+  await expect(page.locator('.monaco-editor .view-lines').first()).toContainText('v1', { timeout: 10000 });
+});
+
 test('template gallery: a starter project opens on its README and runs', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
   await openStudio(page, request, 'Шаблоны', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);

@@ -12,6 +12,7 @@ import {
   ChevronRight,
   ChevronDown,
   Link2,
+  History,
 } from 'lucide-react';
 import { FileItem } from '../types.ts';
 import { useI18n } from '../i18n.ts';
@@ -43,6 +44,13 @@ interface Commit {
   hash: string;
   short: string;
   author: string;
+  date: number;
+  subject: string;
+}
+
+interface Branch {
+  name: string;
+  current: boolean;
   date: number;
   subject: string;
 }
@@ -96,6 +104,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
   const [identity, setIdentity] = useState({ name: '', email: '' });
   const [diff, setDiff] = useState<{ path: string; original: string; modified: string } | null>(null);
   const [showHistory, setShowHistory] = useState(true);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [showBranches, setShowBranches] = useState(true);
+  const [newBranch, setNewBranch] = useState('');
+  // History of one file (null = the whole project)
+  const [fileFilter, setFileFilter] = useState<{ path: string; commits: Commit[] } | null>(null);
   const base = projectId ? `/api/git/${encodeURIComponent(projectId)}` : '';
   const loadSeq = useRef(0);
 
@@ -108,8 +121,11 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
       setStatus(s);
       setError(null);
       if (s.repo) {
-        const log = await call<{ commits: Commit[] }>(`${base}/log`);
-        if (seq === loadSeq.current) setCommits(log.commits);
+        const [log, br] = await Promise.all([call<{ commits: Commit[] }>(`${base}/log`), call<{ branches: Branch[] }>(`${base}/branches`)]);
+        if (seq === loadSeq.current) {
+          setCommits(log.commits);
+          setBranches(br.branches);
+        }
       }
     } catch (e: any) {
       if (seq === loadSeq.current) setError(e.message);
@@ -191,6 +207,41 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
     try {
       const r = await call<{ files: GitFile[] }>(`${base}/commit/${c.hash}`);
       setExpanded((x) => ({ ...x, [c.hash]: r.files }));
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
+  const createBranch = () => {
+    const name = newBranch.trim();
+    if (!name || busy) return;
+    run('branch', () => call(`${base}/branches`, { name }), () => {
+      setNewBranch('');
+      onLog('success', t('git.branchCreated', { name }));
+    });
+  };
+  const switchBranch = (name: string) =>
+    run(`switch:${name}`, () => call(`${base}/switch`, { name }), () => onLog('success', t('git.switched', { name })));
+  const deleteBranch = (name: string) => {
+    if (!confirm(t('git.confirmDeleteBranch', { name }))) return;
+    run(`delete:${name}`, async () => {
+      await call(`${base}/branches/delete`, { name });
+    });
+  };
+
+  /** What one commit changed in one file. */
+  const openCommitFile = async (hash: string, file: string) => {
+    try {
+      setDiff(await call(`${base}/file-at?path=${encodeURIComponent(file)}&hash=${hash}`));
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+  const showFileHistory = async (file: string) => {
+    try {
+      const r = await call<{ commits: Commit[] }>(`${base}/file-log?path=${encodeURIComponent(file)}`);
+      setFileFilter({ path: file, commits: r.commits });
+      setShowHistory(true);
     } catch (e: any) {
       setError(e.message);
     }
@@ -359,6 +410,73 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
           )}
         </div>
 
+        {/* Branches */}
+        {status.hasCommits && (
+          <div className="py-1 border-t border-slate-800" data-git-branches>
+            <button
+              onClick={() => setShowBranches(!showBranches)}
+              className="w-full px-3 py-1 flex items-center gap-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider hover:text-slate-300"
+            >
+              {showBranches ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {t('git.branches')} {branches.length > 0 && `(${branches.length})`}
+            </button>
+            {showBranches && (
+              <div className="px-2 space-y-1">
+                {branches.map((b) => (
+                  <div key={b.name} className="group flex items-center gap-1.5 px-1 py-0.5 text-xs rounded hover:bg-slate-800/60" data-git-branch={b.name}>
+                    <GitBranch className={`w-3 h-3 shrink-0 ${b.current ? 'text-indigo-400' : 'text-slate-500'}`} />
+                    <span className={`truncate flex-1 font-mono ${b.current ? 'text-indigo-300 font-semibold' : 'text-slate-300'}`} title={b.subject}>
+                      {b.name}
+                    </span>
+                    {b.current ? (
+                      <span className="text-[10px] text-slate-500 shrink-0">{t('git.currentBranch')}</span>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => switchBranch(b.name)}
+                          disabled={!!busy}
+                          data-git-switch
+                          className="px-1.5 py-0.5 rounded text-[10px] border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 shrink-0"
+                          title={t('git.switchTitle')}
+                        >
+                          {busy === `switch:${b.name}` ? <Loader2 className="w-3 h-3 animate-spin" /> : t('git.switch')}
+                        </button>
+                        <button
+                          onClick={() => deleteBranch(b.name)}
+                          disabled={!!busy}
+                          className="p-0.5 rounded text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 shrink-0"
+                          title={t('git.deleteBranch')}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+                <div className="flex gap-1 pt-0.5">
+                  <input
+                    value={newBranch}
+                    onChange={(e) => setNewBranch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && createBranch()}
+                    placeholder={t('git.newBranch')}
+                    data-git-new-branch
+                    className="flex-1 min-w-0 bg-canvas text-[11px] text-fg font-mono border border-slate-700 rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    onClick={createBranch}
+                    disabled={!newBranch.trim() || !!busy}
+                    data-git-create-branch
+                    className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-[11px] font-semibold"
+                    title={t('git.createBranchTitle')}
+                  >
+                    {t('git.createBranch')}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Remote */}
         <div className="p-2 border-t border-slate-800 space-y-1.5">
           <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider px-1">{t('git.remote')}</div>
@@ -431,18 +549,30 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
             className="w-full px-3 py-1 flex items-center gap-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider hover:text-slate-300"
           >
             {showHistory ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            {t('git.history')} {commits.length > 0 && `(${commits.length})`}
+            {t('git.history')} {commits.length > 0 && !fileFilter && `(${commits.length})`}
           </button>
+          {showHistory && fileFilter && (
+            <div className="mx-2 mb-1 px-2 py-1 rounded bg-indigo-500/10 border border-indigo-500/30 flex items-center gap-1.5 text-[11px] text-indigo-200" data-git-file-history>
+              <History className="w-3 h-3 shrink-0" />
+              <span className="truncate flex-1 font-mono" title={fileFilter.path}>
+                {t('git.fileHistory', { name: fileFilter.path })} ({fileFilter.commits.length})
+              </span>
+              <button onClick={() => setFileFilter(null)} className="p-0.5 rounded hover:bg-slate-800" title={t('git.allHistory')}>
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
           {showHistory &&
-            (commits.length === 0 ? (
+            ((fileFilter ? fileFilter.commits : commits).length === 0 ? (
               <p className="px-3 py-1 text-xs text-slate-500">{t('git.noCommits')}</p>
             ) : (
-              commits.map((c) => {
+              (fileFilter ? fileFilter.commits : commits).map((c) => {
                 const exp = expanded[c.hash];
                 return (
                   <div key={c.hash}>
                     <div
                       onClick={() => toggleCommit(c)}
+                      data-git-commit={c.short}
                       className="px-3 py-1 hover:bg-slate-800/60 cursor-pointer"
                       title={`${c.hash}\n${c.author}`}
                     >
@@ -459,9 +589,26 @@ export const GitPanel: React.FC<GitPanelProps> = ({ projectId, files, onBeforeAc
                           <Loader2 className="w-3 h-3 animate-spin text-slate-500" />
                         ) : (
                           exp.map((f) => (
-                            <div key={f.path} className="flex items-center gap-1.5 text-[11px] font-mono text-slate-400">
+                            <div
+                              key={f.path}
+                              onClick={() => openCommitFile(c.hash, f.path)}
+                              className="group flex items-center gap-1.5 text-[11px] font-mono text-slate-400 hover:text-slate-200 cursor-pointer"
+                              title={t('git.commitFileDiff')}
+                              data-git-commit-file={f.path}
+                            >
                               {statusBadge(f.status)}
-                              <span className="truncate">{f.path}</span>
+                              <span className="truncate flex-1">{f.path}</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void showFileHistory(f.path);
+                                }}
+                                className="p-0.5 rounded text-slate-500 hover:text-indigo-300 opacity-0 group-hover:opacity-100"
+                                title={t('git.fileHistoryTitle')}
+                                data-git-file-history-btn
+                              >
+                                <History className="w-3 h-3" />
+                              </button>
                             </div>
                           ))
                         )}

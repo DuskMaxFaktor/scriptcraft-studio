@@ -247,6 +247,126 @@ gitRouter.get(
   })
 );
 
+// ---------- branches ----------
+
+/** A branch name git accepts (and nothing that could be read as an option). */
+async function checkBranchName(dir: string, name: unknown): Promise<string> {
+  const n = String(name ?? '').trim();
+  if (!n || n.startsWith('-') || n.length > 120 || (await git(dir, ['check-ref-format', '--branch', n])).code !== 0) {
+    throw new GitError(400, 'Invalid branch name');
+  }
+  return n;
+}
+
+async function hasCommits(dir: string) {
+  return (await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0;
+}
+
+gitRouter.get(
+  '/:id/branches',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    if (!isRepo(dir) || !(await hasCommits(dir))) return { current: null, branches: [] };
+    const raw = await gitOk(dir, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)%1f%(HEAD)%1f%(committerdate:unix)%1f%(subject)', 'refs/heads']);
+    const branches = raw
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        const [name, head, at, subject] = l.split('\x1f');
+        return { name, current: head === '*', date: Number(at) * 1000, subject };
+      });
+    return { current: branches.find((b) => b.current)?.name || null, branches };
+  })
+);
+
+/** Create a branch from the current commit and switch to it (uncommitted changes come along). */
+gitRouter.post(
+  '/:id/branches',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    if (!isRepo(dir)) throw new GitError(409, 'Not a git repository');
+    if (!(await hasCommits(dir))) throw new GitError(409, 'Make the first commit before creating branches');
+    const name = await checkBranchName(dir, req.body?.name);
+    const r = await git(dir, ['switch', '-c', name]);
+    if (r.code !== 0) throw new GitError(409, r.stderr.trim() || 'Cannot create the branch');
+    return readStatus(dir);
+  })
+);
+
+/** Switch to another branch. Refused while there are uncommitted changes, so nothing is lost or mixed. */
+gitRouter.post(
+  '/:id/switch',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    if (!isRepo(dir)) throw new GitError(409, 'Not a git repository');
+    const name = await checkBranchName(dir, req.body?.name);
+    const st = await readStatus(dir);
+    if ('files' in st && st.files && st.files.length > 0) {
+      throw new GitError(409, 'Commit or discard your changes before switching branches');
+    }
+    const r = await git(dir, ['switch', name]);
+    if (r.code !== 0) throw new GitError(409, r.stderr.trim() || 'Cannot switch to the branch');
+    return readStatus(dir);
+  })
+);
+
+/** Delete a branch — only one that is fully merged (git branch -d), never the current one. */
+gitRouter.post(
+  '/:id/branches/delete',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    if (!isRepo(dir)) throw new GitError(409, 'Not a git repository');
+    const name = await checkBranchName(dir, req.body?.name);
+    const current = (await git(dir, ['branch', '--show-current'])).stdout.trim();
+    if (name === current) throw new GitError(409, 'Cannot delete the branch you are on');
+    const r = await git(dir, ['branch', '-d', name]);
+    if (r.code !== 0) {
+      const unmerged = /not fully merged/i.test(r.stderr);
+      throw new GitError(409, unmerged ? `Branch "${name}" has commits that are not merged anywhere — merge it first` : r.stderr.trim() || 'Cannot delete the branch');
+    }
+    return { ok: true };
+  })
+);
+
+// ---------- one file's history ----------
+
+/** Commits that changed a file (following renames). */
+gitRouter.get(
+  '/:id/file-log',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    const file = safePath(dir, req.query.path);
+    if (!isRepo(dir) || !(await hasCommits(dir))) return { commits: [] };
+    const raw = await gitOk(dir, ['log', '--follow', '-n', '100', '--pretty=format:%H%x1f%h%x1f%an%x1f%at%x1f%s%x1e', '--', file]);
+    const commits = raw
+      .split('\x1e')
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .map((r) => {
+        const [hash, short, author, at, subject] = r.split('\x1f');
+        return { hash, short, author, date: Number(at) * 1000, subject };
+      });
+    return { commits };
+  })
+);
+
+/** A file before and after one commit, for the diff view. */
+gitRouter.get(
+  '/:id/file-at',
+  wrap(async (req) => {
+    const dir = projectDir(req.params.id);
+    const file = safePath(dir, req.query.path);
+    const hash = String(req.query.hash || '');
+    if (!/^[0-9a-f]{4,40}$/i.test(hash)) throw new GitError(400, 'Invalid commit');
+    const show = async (rev: string) => {
+      const r = await git(dir, ['show', `${rev}:${file}`]);
+      return r.code === 0 ? r.stdout : '';
+    };
+    const hasParent = (await git(dir, ['rev-parse', '--verify', '--quiet', `${hash}^`])).code === 0;
+    return { path: file, original: hasParent ? await show(`${hash}^`) : '', modified: await show(hash) };
+  })
+);
+
 /** Files changed by one commit. */
 gitRouter.get(
   '/:id/commit/:hash',
