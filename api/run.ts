@@ -20,8 +20,14 @@ const isWin = process.platform === 'win32';
 export function killProcessTree(proc: ChildProcess) {
   if (isWin && proc.pid) {
     spawnSync('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true });
-  } else {
-    proc.kill('SIGKILL');
+  } else if (proc.pid) {
+    // Linux / macOS: the program runs in its own process group (spawnCommand), so its children
+    // (pytest workers, node --test files, subprocesses) stop with it
+    try {
+      process.kill(-proc.pid, 'SIGKILL');
+    } catch {
+      proc.kill('SIGKILL');
+    }
   }
 }
 
@@ -213,6 +219,8 @@ export function spawnCommand(command: string, args: string[], cwd: string, extra
     env,
     shell: isWin,
     windowsHide: true,
+    // Its own process group on Linux / macOS, so killProcessTree reaches the whole tree
+    detached: !isWin,
   });
   procCwd.set(proc, path.resolve(cwd));
   return proc;

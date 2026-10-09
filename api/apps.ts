@@ -218,6 +218,12 @@ const wrap =
 
 export const appsRouter = Router();
 
+// The Windows registry, msiexec, winget and the startup list exist only on Windows
+appsRouter.use((_req, res, next) => {
+  if (process.platform === 'win32' || process.env.SCRIPTCRAFT_APPS_FIXTURE) return next();
+  res.status(400).json({ error: 'Programs on this PC are available on Windows only', windowsOnly: true });
+});
+
 appsRouter.get(
   '/',
   wrap(async () => {

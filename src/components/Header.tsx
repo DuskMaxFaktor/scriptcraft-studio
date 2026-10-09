@@ -29,6 +29,9 @@ import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
 import { useUpdateInfo } from '../updates.ts';
 
+// The studio's server runs on this same computer, so the window's OS is the server's OS
+const IS_WINDOWS = typeof navigator === 'undefined' || /Windows/i.test(navigator.userAgent);
+
 interface HeaderProps {
   activeFile: FileItem | null;
   isRunning: boolean;
@@ -289,15 +292,17 @@ export const Header: React.FC<HeaderProps> = ({
           <Braces className="w-4 h-4" />
         </button>
 
-        {/* Programs installed on this PC */}
-        <button
-          onClick={onOpenApps}
-          data-open-apps
-          className="p-1.5 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-300 hover:text-fg transition-colors"
-          title={t('apps.open')}
-        >
-          <AppWindow className="w-4 h-4" />
-        </button>
+        {/* Programs installed on this PC (Windows only: registry, winget, startup list) */}
+        {IS_WINDOWS && (
+          <button
+            onClick={onOpenApps}
+            data-open-apps
+            className="p-1.5 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-300 hover:text-fg transition-colors"
+            title={t('apps.open')}
+          >
+            <AppWindow className="w-4 h-4" />
+          </button>
+        )}
 
         {/* Debug Button */}
         {!canStop && (
