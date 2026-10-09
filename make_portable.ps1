@@ -38,7 +38,8 @@ if (Test-Path $Out) { Remove-Item $Out -Recurse -Force }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $items = @("api", "dist", "electron", "public", "scripts", "src", "tests", "server.ts", "index.html", "vite.config.ts", "tsconfig.json",
            "package.json", "package-lock.json", "metadata.json", "start_studio.bat", "run_studio.vbs", "create_desktop_shortcut.bat",
-           "diagnostics.bat", "run_script.bat", "build_exe.ps1", "build_exe.bat", "make_icon.py", "app.ico", "ScriptCraftStudio.exe", ".env.example", ".gitignore")
+           "diagnostics.bat", "run_script.bat", "build_exe.ps1", "build_exe.bat", "make_icon.py", "app.ico", "ScriptCraftStudio.exe", ".env.example", ".gitignore",
+           "README.md", "PRIVACY.md", "LICENSE")
 foreach ($item in $items) {
     if (Test-Path $item) { Copy-Item $item -Destination $Out -Recurse -Force }
 }
@@ -95,6 +96,11 @@ if ($LASTEXITCODE -ne 0) { throw "Installing pip into the bundled Python failed"
 # and pefile + capstone (the "Disassembler": inspect/patch .exe files); the studio finds them in runtime\python
 & (Join-Path $PyDir "python.exe") -m pip install ruff jedi pytest pyinstaller pefile capstone --no-warn-script-location --disable-pip-version-check
 if ($LASTEXITCODE -ne 0) { throw "Installing Ruff, Jedi, pytest, PyInstaller, pefile and capstone into the bundled Python failed" }
+
+# 6b. Licenses of everything inside (npm packages, Node.js, Python, pip packages)
+Step "Collecting third-party licenses"
+& (Join-Path $Out "runtime\node\node.exe") (Join-Path $Root "scripts\gen_notices.mjs") --root $Out --out $Out
+if ($LASTEXITCODE -ne 0) { throw "Collecting licenses failed" }
 
 # 7. Portable marker + readme
 Set-Content -Path (Join-Path $Out ".portable-build") -Value "Portable build $(Get-Date -Format s)" -Encoding ascii

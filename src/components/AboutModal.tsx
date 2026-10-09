@@ -6,7 +6,7 @@ import { askConfirm } from '../dialogs.tsx';
 
 // "About ScriptCraft Studio": version and updates, reporting a problem.
 
-export type Tab = 'help' | 'updates' | 'report';
+export type Tab = 'help' | 'updates' | 'report' | 'legal';
 
 const MarkdownPreview = lazy(() => import('./MarkdownPreview.tsx').then((m) => ({ default: m.MarkdownPreview })));
 
@@ -98,7 +98,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onMouseDown={onClose}>
       <div
-        className={`bg-raised border border-slate-700 rounded-xl w-full ${tab === 'help' ? 'max-w-4xl h-[85vh]' : 'max-w-lg max-h-[90vh]'} shadow-2xl overflow-hidden flex flex-col`}
+        className={`bg-raised border border-slate-700 rounded-xl w-full ${tab === 'help' || tab === 'legal' ? 'max-w-4xl h-[85vh]' : 'max-w-lg max-h-[90vh]'} shadow-2xl overflow-hidden flex flex-col`}
         onMouseDown={(e) => e.stopPropagation()}
         data-about
       >
@@ -112,7 +112,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
           </button>
         </div>
 
-        <div className={`p-5 space-y-4 text-xs flex-1 min-h-0 ${tab === 'help' ? 'flex flex-col' : 'overflow-auto'}`}>
+        <div className={`p-5 space-y-4 text-xs flex-1 min-h-0 ${tab === 'help' || tab === 'legal' ? 'flex flex-col' : 'overflow-auto'}`}>
           <div>
             <div className="text-base font-semibold text-fg">ScriptCraft Studio</div>
             <div className="text-slate-400" data-about-version>
@@ -121,8 +121,8 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
             </div>
           </div>
 
-          <div className="flex gap-1 border-b border-slate-800">
-            {(['help', 'updates', 'report'] as Tab[]).map((id) => (
+          <div className="flex flex-wrap gap-x-1 border-b border-slate-800">
+            {(['help', 'updates', 'report', 'legal'] as Tab[]).map((id) => (
               <button
                 key={id}
                 onClick={() => setTab(id)}
@@ -135,6 +135,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
           </div>
 
           {tab === 'help' && <HelpSection onShowTour={onShowTour} />}
+          {tab === 'legal' && <LegalSection />}
           {tab === 'report' && <ReportSection repo={status?.repo || ''} />}
 
           {tab === 'updates' && (
@@ -314,6 +315,111 @@ const HelpSection: React.FC<{ onShowTour?: () => void }> = ({ onShowTour }) => {
       <div ref={body} className="flex-1 min-w-0 overflow-auto pr-2 text-sm">
         <Suspense fallback={<Loader2 className="w-4 h-4 animate-spin text-slate-500" />}>{text && <MarkdownPreview content={text} />}</Suspense>
       </div>
+    </div>
+  );
+};
+
+interface ThirdParty {
+  name: string;
+  version: string;
+  license: string;
+  homepage: string;
+  sources: string[];
+  hasText: boolean;
+}
+
+/** "Licenses and data": what goes where (PRIVACY.md), the studio's own license and the third-party list. */
+const LegalSection: React.FC = () => {
+  const { t } = useI18n();
+  const [privacy, setPrivacy] = useState('');
+  const [own, setOwn] = useState<string | null>(null);
+  const [items, setItems] = useState<ThirdParty[] | null>(null);
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState<'privacy' | 'components'>('privacy');
+
+  useEffect(() => {
+    fetch('/api/about/privacy').then((r) => (r.ok ? r.text() : '')).then(setPrivacy).catch(() => {});
+    fetch('/api/about/license').then((r) => (r.ok ? r.text() : null)).then(setOwn).catch(() => {});
+    fetch('/api/about/components')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setItems(d?.items || []))
+      .catch(() => setItems([]));
+  }, []);
+
+  const q = query.trim().toLowerCase();
+  const shown = (items || []).filter((i) => !q || i.name.toLowerCase().includes(q) || i.license.toLowerCase().includes(q));
+  const counts = new Map<string, number>();
+  for (const i of items || []) counts.set(i.license, (counts.get(i.license) || 0) + 1);
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0 gap-3" data-legal>
+      <div className="flex gap-2 flex-wrap items-center">
+        {(['privacy', 'components'] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`px-2.5 py-1 rounded font-semibold ${view === v ? 'bg-indigo-600 text-white' : 'bg-panel text-slate-300 hover:text-fg border border-slate-700'}`}
+            data-legal-view={v}
+          >
+            {t(`legal.${v}`)}
+          </button>
+        ))}
+        <a href="/api/about/licenses" target="_blank" rel="noreferrer" className="ml-auto text-indigo-300 hover:underline flex items-center gap-1">
+          <ExternalLink className="w-3.5 h-3.5" /> {t('legal.fullTexts')}
+        </a>
+      </div>
+
+      {view === 'privacy' && (
+        <div className="flex-1 min-h-0 overflow-auto pr-2 text-sm space-y-3">
+          <div className="p-2 rounded border border-slate-800 bg-panel text-xs text-slate-300" data-legal-own>
+            <span className="font-semibold text-slate-200">{t('legal.ownLicense')}: </span>
+            {own ? <span className="whitespace-pre-wrap">{own.split('\n').find((l) => l.trim()) || ''}</span> : t('legal.ownNone')}
+          </div>
+          <Suspense fallback={<Loader2 className="w-4 h-4 animate-spin text-slate-500" />}>{privacy && <MarkdownPreview content={privacy} />}</Suspense>
+        </div>
+      )}
+
+      {view === 'components' && (
+        <div className="flex flex-col flex-1 min-h-0 gap-2">
+          <div className="text-slate-400">
+            {t('legal.summary', { count: items?.length ?? 0 })}{' '}
+            {[...counts]
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 6)
+              .map(([l, n]) => `${l} — ${n}`)
+              .join(' · ')}
+          </div>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('legal.search')}
+            className="w-full px-2 py-1.5 rounded bg-panel border border-slate-700 text-xs text-fg outline-none focus:border-indigo-500"
+            data-legal-search
+          />
+          <div className="flex-1 min-h-0 overflow-auto border border-slate-800 rounded">
+            {items && items.length === 0 && <div className="p-3 text-slate-500">{t('legal.noList')}</div>}
+            <table className="w-full text-[11px]">
+              <tbody>
+                {shown.map((i) => (
+                  <tr key={`${i.name}@${i.version}`} className="border-b border-slate-800/60 hover:bg-slate-800/40" data-legal-row={i.name}>
+                    <td className="px-2 py-1 font-mono text-slate-200">{i.name}</td>
+                    <td className="px-2 py-1 text-slate-500">{i.version}</td>
+                    <td className={`px-2 py-1 ${/GPL|EPL|MPL/.test(i.license) && !/MIT OR|OR Apache/.test(i.license) ? 'text-amber-300' : 'text-slate-300'}`}>{i.license}</td>
+                    <td className="px-2 py-1 text-slate-500">{i.sources.join(', ')}</td>
+                    <td className="px-2 py-1">
+                      {/^https?:\/\//.test(i.homepage) && (
+                        <a href={i.homepage} target="_blank" rel="noreferrer" className="text-indigo-300 hover:underline">
+                          {t('legal.site')}
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

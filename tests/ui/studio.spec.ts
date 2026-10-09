@@ -721,6 +721,24 @@ test('help: contents jump to a section; the tour walks through the studio and cl
   expect(await page.evaluate(() => localStorage.getItem('scriptcraft-welcome-done'))).toBe('1');
 });
 
+test('licenses and data: privacy text, the component list with search, full texts', async ({ page, request }) => {
+  await openStudio(page, request, 'Лицензии', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.locator('[data-open-about]').click();
+  await page.locator('[data-about-tab="legal"]').click();
+  const legal = page.locator('[data-legal]');
+  await expect(legal).toContainText('телеметрии');
+  await expect(legal).toContainText('Никогда не отправляются в ИИ');
+  await legal.locator('[data-legal-view="components"]').click();
+  await expect(legal.locator('[data-legal-row="react"]')).toContainText('MIT');
+  await legal.locator('[data-legal-search]').fill('monaco-editor');
+  await expect(legal.locator('[data-legal-row]').first()).toContainText('monaco-editor');
+  await expect(legal.locator('[data-legal-row="react"]')).toHaveCount(0);
+  const texts = await request.get('/api/about/licenses');
+  expect(texts.ok()).toBeTruthy();
+  expect(await texts.text()).toContain('Permission is hereby granted');
+  expect((await request.get('/api/about/..%2Fpackage.json')).status()).toBe(404);
+});
+
 test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
   test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
   await openStudio(page, request, 'Покрытие', [

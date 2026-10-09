@@ -10,6 +10,7 @@ import { gitRouter } from './git.ts';
 import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import JSZip from 'jszip';
 import { handleMultiTurnChat, handleCodeAction, handleAgentStep, streamMultiTurnChat, ALLOWED_MODELS, handleAgentPlan } from './gemini.ts';
 import { executeCodeOnServer, runRouter } from './run.ts';
@@ -50,6 +51,21 @@ apiRouter.use('/run', runRouter);
 
 apiRouter.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), previewPort: getPreviewPort() });
+});
+
+// Documents shipped next to the studio, for the "Licenses and data" tab of the About window
+const ABOUT_DOCS: Record<string, string> = {
+  privacy: 'PRIVACY.md',
+  notices: 'THIRD_PARTY_NOTICES.md',
+  licenses: 'THIRD_PARTY_LICENSES.txt',
+  license: 'LICENSE',
+  components: 'THIRD_PARTY.json',
+};
+apiRouter.get('/about/:doc', (req, res) => {
+  const name = ABOUT_DOCS[req.params.doc];
+  const file = name ? [process.cwd(), path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')].map((d) => path.join(d, name)).find((f) => fs.existsSync(f)) : null;
+  if (!file) return res.status(404).json({ error: 'Not found' });
+  res.type('text/plain; charset=utf-8').send(fs.readFileSync(file, 'utf-8'));
 });
 
 // Gemini models + models of the user's own providers (installed Ollama models, custom server)

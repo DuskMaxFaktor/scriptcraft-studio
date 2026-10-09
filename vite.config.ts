@@ -16,6 +16,30 @@ export default defineConfig(() => {
       react(),
       tailwindcss(),
       {
+        // Which npm packages end up inside the built interface: scripts/gen_notices.mjs lists their licenses
+        name: 'bundled-packages',
+        apply: 'build',
+        generateBundle(_options, bundle) {
+          const names = new Set<string>();
+          for (const item of Object.values(bundle)) {
+            if (item.type !== 'chunk') continue;
+            for (const id of Object.keys(item.modules)) {
+              const m = /[\\/]node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)/.exec(id.split('?')[0]);
+              if (m) names.add(m[1].replace(/\\/g, '/'));
+            }
+          }
+          // CSS-only packages (fonts, KaTeX styles) are not chunk modules
+          for (const item of Object.values(bundle)) {
+            if (item.type === 'asset' && /\.(woff2?|ttf)$/.test(item.fileName)) {
+              const src = (item as { originalFileNames?: string[] }).originalFileNames?.[0] || '';
+              const m = /node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)/.exec(src);
+              if (m) names.add(m[1].replace(/\\/g, '/'));
+            }
+          }
+          this.emitFile({ type: 'asset', fileName: 'bundled-packages.json', source: JSON.stringify([...names].sort(), null, 1) });
+        },
+      },
+      {
         name: 'api-server-middleware',
         configureServer(server) {
           const app = express();

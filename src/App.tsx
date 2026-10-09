@@ -54,8 +54,8 @@ export default function App() {
   const [splitWidth, setSplitWidth] = usePersistentSize('scriptcraft-split-width', 520);
   const [isHotkeysOpen, setIsHotkeysOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
-  const [aboutTab, setAboutTab] = useState<'help' | 'updates' | 'report'>('updates');
-  const openAbout = (tab: 'help' | 'updates' | 'report') => {
+  const [aboutTab, setAboutTab] = useState<'help' | 'updates' | 'report' | 'legal'>('updates');
+  const openAbout = (tab: 'help' | 'updates' | 'report' | 'legal') => {
     setAboutTab(tab);
     setIsAboutOpen(true);
   };
