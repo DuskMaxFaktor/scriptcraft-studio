@@ -46,6 +46,21 @@ test('pytest from the bundled Python runs the Tests tab', async ({ page, request
   await expect(page.locator('[data-test-case="test_add"]')).toHaveAttribute('data-status', 'passed', { timeout: 60_000 });
 });
 
+test('licenses ship with the build; the window loads nothing from Google', async ({ page, request }) => {
+  const components = await (await request.get('/api/about/components')).json();
+  expect(components.items.length).toBeGreaterThan(300);
+  expect(components.items.some((i: { name: string }) => i.name === 'Python')).toBeTruthy();
+  expect((await request.get('/api/about/licenses')).ok()).toBeTruthy();
+  expect((await request.get('/api/about/privacy')).ok()).toBeTruthy();
+  const external: string[] = [];
+  page.on('request', (r) => {
+    if (!/^https?:\/\/(localhost|127\.0\.0\.1)/.test(r.url()) && !r.url().startsWith('data:')) external.push(r.url());
+  });
+  await openProject(page, request, 'Сеть', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.waitForTimeout(1500);
+  expect(external.filter((u) => /fonts\.(googleapis|gstatic)\.com/.test(u))).toEqual([]);
+});
+
 test('the problem report names the installed build and the bundled Python', async ({ request }) => {
   const { report } = await (await request.post('/api/logs/report', { data: { description: 'smoke' } })).json();
   expect(report).toMatch(/ScriptCraft Studio \d+\.\d+\.\d+ \(installed\)/);
