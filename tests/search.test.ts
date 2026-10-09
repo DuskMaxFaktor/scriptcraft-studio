@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { searchFiles, replaceInText, matchesFilter, SearchOptions } from '../src/utils/search.ts';
+import { searchFiles, replaceInText, replaceOneInText, matchesFilter, SearchOptions } from '../src/utils/search.ts';
 
 const opts = (o: Partial<SearchOptions>): SearchOptions => ({
   query: '',
@@ -57,4 +57,16 @@ test('replace: plain text keeps "$" literally, regex supports groups', () => {
   const rx = replaceInText('def add(a, b):', opts({ query: '(\\w+)\\((\\w+), (\\w+)\\)', regex: true }), '$1($3, $2)');
   assert.deepEqual(rx, { text: 'def add(b, a):', count: 1 });
   assert.deepEqual(replaceInText('abc', opts({ query: 'x' }), 'y'), { text: 'abc', count: 0 });
+});
+
+test('replace one occurrence: only the match at that line/column changes', () => {
+  const o = { query: 'name', caseSensitive: false, wholeWord: false, regex: false, include: '' };
+  const text = 'name = 1\nprint(name, name)\n';
+  // the second "name" on line 2 (column 13)
+  assert.deepEqual(replaceOneInText(text, o, 'value', 2, 13), { text: 'name = 1\nprint(name, value)\n', count: 1 });
+  // a stale position (the file changed since the search) changes nothing
+  assert.deepEqual(replaceOneInText(text, o, 'value', 2, 3), { text, count: 0 });
+  // regex mode keeps $1 groups
+  const r = { ...o, query: String.raw`print\((\w+)`, regex: true };
+  assert.equal(replaceOneInText(text, r, 'show($1', 2, 1).text, 'name = 1\nshow(name, name)\n');
 });

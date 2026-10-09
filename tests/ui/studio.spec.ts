@@ -142,6 +142,35 @@ test('project search finds text in other files', async ({ page, request }) => {
   await expect(page.locator('[title="lib/util.py"]').first()).toBeVisible();
 });
 
+test('project replace: one occurrence, undo, then replace in all files', async ({ page, request }) => {
+  const project = await openStudio(page, request, 'Замена', [
+    { name: 'a.py', content: 'name = 1\nprint(name)\n', isEntry: true },
+    { name: 'b.py', content: 'name = 2\n' },
+  ]);
+  await page.keyboard.press('Control+Shift+F');
+  await page.getByPlaceholder('Искать во всех файлах').fill('name');
+  await page.getByTitle('Показать / скрыть замену').click();
+  await page.getByPlaceholder('Заменить на').fill('value');
+  await expect(page.locator('[data-search-match]')).toHaveCount(3);
+
+  // Replace just the first match of a.py
+  const first = page.locator('[data-search-match]').first();
+  await first.hover();
+  await first.locator('[data-replace-one]').click();
+  await expect.poll(() => projectFile(request, project.id, 'a.py')).toBe('value = 1\nprint(name)\n');
+  await expect(page.locator('[data-replace-done]')).toContainText('1');
+
+  // Undo brings the file back
+  await page.locator('[data-replace-undo]').click();
+  await expect.poll(() => projectFile(request, project.id, 'a.py')).toBe('name = 1\nprint(name)\n');
+
+  // Replace everywhere (after confirmation)
+  page.once('dialog', (d) => d.accept());
+  await page.getByTitle('Заменить во всех файлах').click();
+  await expect.poll(() => projectFile(request, project.id, 'a.py')).toBe('value = 1\nprint(value)\n');
+  await expect.poll(() => projectFile(request, project.id, 'b.py')).toBe('value = 2\n');
+});
+
 test('projects dialog creates and switches to a new project', async ({ page, request }) => {
   await openStudio(page, request, 'Первый', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
   await page.locator('button[title^="Мои проекты"]').click();

@@ -105,3 +105,20 @@ export function replaceInText(text: string, o: SearchOptions, replacement: strin
     .join('\n');
   return { text: out, count };
 }
+
+/** Replace only the match at (line, column) — "replace this one" in the results list. */
+export function replaceOneInText(text: string, o: SearchOptions, replacement: string, line: number, column: number): { text: string; count: number } {
+  const re = buildRegex(o);
+  if (!re) return { text, count: 0 };
+  const lines = text.split('\n');
+  const src = lines[line - 1];
+  if (src === undefined) return { text, count: 0 };
+  re.lastIndex = column - 1;
+  const m = re.exec(src);
+  // The match must still be exactly where the results list saw it (the file may have changed)
+  if (!m || m.index !== column - 1 || m[0].length === 0) return { text, count: 0 };
+  const one = new RegExp(re.source, re.flags.replace('g', ''));
+  const replaced = o.regex ? m[0].replace(one, replacement) : replacement;
+  lines[line - 1] = src.slice(0, m.index) + replaced + src.slice(m.index + m[0].length);
+  return { text: lines.join('\n'), count: 1 };
+}

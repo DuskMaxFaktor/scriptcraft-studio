@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Replace, ChevronRight, ChevronDown, CaseSensitive, WholeWord, Regex, X, FileCode } from 'lucide-react';
+import { Search, Replace, ChevronRight, ChevronDown, CaseSensitive, WholeWord, Regex, X, FileCode, Undo2 } from 'lucide-react';
 import { FileItem } from '../types.ts';
 import { useI18n } from '../i18n.ts';
-import { searchFiles, replaceInText, buildRegex, SearchOptions } from '../utils/search.ts';
+import { searchFiles, replaceInText, replaceOneInText, buildRegex, SearchOptions } from '../utils/search.ts';
 
 interface SearchPanelProps {
   files: FileItem[];
@@ -26,6 +26,17 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ files, onReveal, onRep
   const [debounced, setDebounced] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
+  // The file contents before the last replace, so it can be undone in one click
+  const [undo, setUndo] = useState<{ changes: { fileId: string; content: string }[]; count: number } | null>(null);
+
+  /** Apply replacements and remember what the files looked like before. */
+  const applyWithUndo = (changes: { fileId: string; content: string }[], count: number) => {
+    const before = changes
+      .map((c) => ({ fileId: c.fileId, content: files.find((f) => f.id === c.fileId)?.content }))
+      .filter((c): c is { fileId: string; content: string } => typeof c.content === 'string');
+    onReplace(changes);
+    setUndo({ changes: before, count });
+  };
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -62,7 +73,15 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ files, onReveal, onRep
     }
     if (changes.length === 0) return;
     if (!confirm(t('search.confirmReplace', { count, files: changes.length, text: replacement }))) return;
-    onReplace(changes);
+    applyWithUndo(changes, count);
+  };
+
+  /** Replace just this one occurrence (no confirmation: it is a single, visible change). */
+  const replaceOne = (fileId: string, line: number, column: number) => {
+    const f = files.find((x) => x.id === fileId);
+    if (!f) return;
+    const r = replaceOneInText(f.content, options, replacement, line, column);
+    if (r.count) applyWithUndo([{ fileId, content: r.text }], 1);
   };
 
   const toggle = (on: boolean, set: (v: boolean) => void, Icon: React.FC<any>, title: string) => (
@@ -159,6 +178,21 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ files, onReveal, onRep
               ? t('search.summary', { count: total, files: results.length }) + (truncated ? ` ${t('search.truncated')}` : '')
               : t('search.hint')}
         </div>
+        {undo && (
+          <div className="flex items-center gap-2 px-1 text-[11px] text-emerald-300" data-replace-done>
+            <span>{t('search.replacedCount', { count: undo.count })}</span>
+            <button
+              onClick={() => {
+                onReplace(undo.changes);
+                setUndo(null);
+              }}
+              className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 text-slate-200 hover:bg-slate-800"
+              data-replace-undo
+            >
+              <Undo2 className="w-3 h-3" /> {t('search.undoReplace')}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto py-1 text-xs">
@@ -200,10 +234,24 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({ files, onReveal, onRep
                   <div
                     key={i}
                     onClick={() => onReveal(r.fileId, m.line, m.column, m.length)}
-                    className="flex items-baseline gap-2 pl-8 pr-2 py-0.5 cursor-pointer hover:bg-active font-mono text-[11px] whitespace-nowrap overflow-hidden"
+                    className="group/match flex items-baseline gap-2 pl-8 pr-2 py-0.5 cursor-pointer hover:bg-active font-mono text-[11px] whitespace-nowrap overflow-hidden"
+                    data-search-match
                   >
                     <span className="text-slate-500 shrink-0 w-6 text-right">{m.line}</span>
-                    <span className="truncate">{highlight(m.preview, m.column, m.length)}</span>
+                    <span className="truncate flex-1">{highlight(m.preview, m.column, m.length)}</span>
+                    {showReplace && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          replaceOne(r.fileId, m.line, m.column);
+                        }}
+                        className="shrink-0 p-0.5 rounded text-slate-400 hover:text-fg hover:bg-slate-700 opacity-0 group-hover/match:opacity-100 focus:opacity-100"
+                        title={t('search.replaceOne')}
+                        data-replace-one
+                      >
+                        <Replace className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                 ))}
             </div>
