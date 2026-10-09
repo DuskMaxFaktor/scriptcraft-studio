@@ -17,8 +17,9 @@ import {
   Wrench,
   Columns2,
   Eye,
+  FileDown,
 } from 'lucide-react';
-import { MarkdownPreview } from './MarkdownPreview.tsx';
+import { MarkdownPreview, previewToHtml } from './MarkdownPreview.tsx';
 import type { Breakpoint } from '../utils/debugClient.ts';
 import { FileItem, FileLanguage } from '../types.ts';
 import { useI18n } from '../i18n.ts';
@@ -126,6 +127,31 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const [mdPreview, setMdPreview] = useState(true);
   const isMarkdown = activeFile.language === 'markdown' || /\.(md|markdown)$/i.test(activeFile.name);
   const showMdPreview = isMarkdown && mdPreview;
+  const mdPreviewRef = useRef<HTMLDivElement>(null);
+
+  /** Save the rendered Markdown (formulas and diagrams included) as a standalone .html file. */
+  const exportMarkdownHtml = async () => {
+    if (!mdPreview) setMdPreview(true);
+    // Wait for the preview and its diagrams (rendered asynchronously) to be ready
+    const started = Date.now();
+    for (;;) {
+      const el = mdPreviewRef.current?.querySelector('[data-md-preview]');
+      const pending = el ? [...el.querySelectorAll('[data-mermaid]')].some((d) => !d.querySelector('svg') && !d.querySelector('pre')) : true;
+      if (el && !pending) break;
+      if (Date.now() - started > 5000) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const el = mdPreviewRef.current?.querySelector('[data-md-preview]');
+    if (!el) return;
+    const base = activeFile.name.slice(activeFile.name.lastIndexOf('/') + 1).replace(/\.(md|markdown)$/i, '');
+    const html = previewToHtml(el, base);
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${base}.html`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [tools, setTools] = useState(getCodeToolsState);
   const activeFileNameRef = useRef(activeFile.name);
@@ -492,6 +518,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               <Eye className="w-3.5 h-3.5" />
             </button>
           )}
+          {isMarkdown && (
+            <button
+              onClick={exportMarkdownHtml}
+              data-md-export
+              className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200"
+              title={t('md.exportHtml')}
+            >
+              <FileDown className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           <button
             onClick={handleFormatCode}
@@ -576,7 +612,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         />
       </div>
         {showMdPreview && (
-          <div className="w-1/2 min-h-0 overflow-auto bg-canvas">
+          <div ref={mdPreviewRef} className="w-1/2 min-h-0 overflow-auto bg-canvas">
             <MarkdownPreview content={activeFile.content} projectId={projectId || undefined} />
           </div>
         )}

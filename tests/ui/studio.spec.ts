@@ -2,6 +2,7 @@
 // Every test works in its own project (created through the API), so tests don't depend on each other.
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { spawnSync } from 'child_process';
+import fs from 'fs';
 
 const hasPython = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['--version'], { shell: true }).status === 0;
 
@@ -189,6 +190,25 @@ test('markdown preview renders the .md file and toggles off', async ({ page, req
   // The eye button hides the preview
   await page.locator('[data-md-preview-toggle]').click();
   await expect(preview).toBeHidden();
+});
+
+test('markdown preview: formulas (KaTeX), mermaid diagrams and export to HTML', async ({ page, request }) => {
+  const md = '# Отчёт\n\nФормула $E = mc^2$ и блок:\n\n$$\n\\int_0^1 x\\,dx\n$$\n\n```mermaid\ngraph TD\n  A[Старт] --> B[Финиш]\n```\n';
+  await openStudio(page, request, 'Формулы', [{ name: 'report.md', language: 'markdown', isEntry: true, content: md }]);
+  const preview = page.locator('[data-md-preview]');
+  await expect(preview.locator('.katex').first()).toBeVisible();
+  await expect(preview.locator('.katex-display')).toHaveCount(1);
+  await expect(preview.locator('[data-mermaid] svg')).toBeVisible({ timeout: 20_000 });
+  await expect(preview.locator('[data-mermaid] svg')).toContainText('Финиш');
+
+  // Export: a standalone .html with the rendered formulas and the diagram
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('[data-md-export]').click()]);
+  expect(download.suggestedFilename()).toBe('report.html');
+  const html = fs.readFileSync((await download.path())!, 'utf-8');
+  expect(html).toContain('<!doctype html>');
+  expect(html).toContain('class="katex');
+  expect(html).toContain('<svg');
+  expect(html).toContain('Финиш');
 });
 
 test('web preview shows the project page on its own port', async ({ page, request }) => {
