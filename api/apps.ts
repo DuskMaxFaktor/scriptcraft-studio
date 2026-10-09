@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { spawn, execFile } from 'child_process';
+import { spawnCommand, startSession } from './run.ts';
 
 // "Programs on this PC": the installed applications Windows knows about (the same registry entries
 // "Programs and Features" shows), a health check of each entry, and the program's OWN repair:
@@ -245,6 +246,83 @@ appsRouter.post(
     child.on('error', () => {});
     child.unref();
     return { started: true, command: cmd };
+  })
+);
+
+// ---------- updates (winget) ----------
+
+export interface WingetUpdate {
+  name: string;
+  id: string;
+  version: string;
+  available: string;
+  source: string;
+}
+
+/**
+ * Parse the table "winget upgrade" prints:
+ *   Name   Id   Version   Available   Source
+ *   ------------------------------------------
+ *   rows…
+ * Columns are found from where the header words start (the header may be localized).
+ */
+export function parseWingetUpgrade(text: string): WingetUpdate[] {
+  // "\r\n" ends a line; a lone "\r" redraws it (the progress spinner): keep what was drawn last
+  const lines = text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.split('\r').pop() || '');
+  const dashes = lines.findIndex((l, i) => i > 0 && /^-{10,}\s*$/.test(l) && lines[i - 1].trim());
+  if (dashes < 0) return [];
+  const header = lines[dashes - 1];
+  const starts: number[] = [];
+  for (let i = 0; i < header.length; i++) if (header[i] !== ' ' && (i === 0 || header[i - 1] === ' ')) starts.push(i);
+  if (starts.length < 4) return [];
+  const out: WingetUpdate[] = [];
+  for (const line of lines.slice(dashes + 1)) {
+    if (!line.trim()) continue;
+    if (line.length < starts[starts.length - 1] || /^\d+\s/.test(line.trim())) break; // the "N upgrades available" footer
+    const cells = starts.map((s, k) => line.slice(s, k + 1 < starts.length ? starts[k + 1] : undefined).trim());
+    const [name, id, version, available, source = ''] = cells;
+    if (!id || !available || !/^[\w.+-]{1,200}$/.test(id)) continue;
+    out.push({ name, id, version, available, source });
+  }
+  return out;
+}
+
+function runWingetList(): Promise<{ available: boolean; text: string }> {
+  const fixture = process.env.SCRIPTCRAFT_WINGET_FIXTURE;
+  if (fixture) return Promise.resolve({ available: true, text: fs.readFileSync(fixture, 'utf-8') });
+  if (!isWin) return Promise.resolve({ available: false, text: '' });
+  return new Promise((resolve) => {
+    // Read-only listing; --disable-interactivity: never block on a prompt
+    execFile('winget', ['upgrade', '--disable-interactivity'], { windowsHide: true, timeout: 120_000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
+      if (err && (err as any).code === 'ENOENT') return resolve({ available: false, text: '' });
+      resolve({ available: true, text: String(stdout || '') });
+    });
+  });
+}
+
+appsRouter.get(
+  '/updates',
+  wrap(async () => {
+    const { available, text } = await runWingetList();
+    return { available, updates: available ? parseWingetUpgrade(text) : [] };
+  })
+);
+
+/** Update one program with winget (output streams like a program run). Only an id from a fresh listing. */
+appsRouter.post(
+  '/updates/:wingetId/install',
+  wrap(async (req) => {
+    const id = String(req.params.wingetId);
+    const { available, text } = await runWingetList();
+    if (!available) throw new AppsError(409, 'winget is not available on this PC');
+    if (!parseWingetUpgrade(text).some((u) => u.id === id)) throw new AppsError(404, 'No update for this program (the list may have changed — refresh it)');
+    const args = ['upgrade', '--id', id, '--exact', '--disable-interactivity', '--accept-source-agreements', '--accept-package-agreements'];
+    if (process.env.SCRIPTCRAFT_APPS_DRYRUN === '1') return { dryRun: true, command: { exe: 'winget', args } };
+    const proc = spawnCommand('winget', args, process.cwd());
+    return { runId: startSession(proc, undefined, 30 * 60 * 1000) };
   })
 );
 

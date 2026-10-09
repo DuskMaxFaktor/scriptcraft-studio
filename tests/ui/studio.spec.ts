@@ -193,6 +193,13 @@ test('programs on this PC: search, problems filter, repair (dry run)', async ({ 
   await modal.locator('[data-app-row="Test App"] [data-app-repair]').click();
   await expect(modal.locator('[data-apps-notice]')).toContainText('Ремонт «Test App» запущен');
   await expect(modal.locator('[data-app-row="Broken Tool"] [data-app-repair]')).toHaveCount(0);
+  // Updates: a badge on the program, the updates view, and winget upgrade after confirmation (dry run)
+  await expect(modal.locator('[data-app-row="Test App"]')).toContainText('→ 1.3.0');
+  await modal.locator('[data-apps-updates]').click();
+  await expect(modal.locator('[data-update-row]')).toHaveCount(1);
+  page.once('dialog', (d) => d.accept());
+  await modal.locator('[data-update-row="Test.App"] [data-update-install]').click();
+  await expect(modal.locator('[data-apps-notice]')).toContainText('winget upgrade --id Test.App --exact');
 });
 
 test('projects dialog creates and switches to a new project', async ({ page, request }) => {

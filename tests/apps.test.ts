@@ -42,6 +42,18 @@ before(async () => {
   const file = path.join(tmp, 'apps.json');
   fs.writeFileSync(file, JSON.stringify(fixture));
   process.env.SCRIPTCRAFT_APPS_FIXTURE = file;
+  // What "winget upgrade" prints (with the progress spinner it draws before the table)
+  const winget = path.join(tmp, 'winget.txt');
+  fs.writeFileSync(
+    winget,
+    '   - \r   \\ \r' +
+      'Name                 Id                 Version Available Source\r\n' +
+      '------------------------------------------------------------------\r\n' +
+      'Good App             Good.App           2.1     2.2       winget\r\n' +
+      'Модный редактор      Mod.Editor         5       6.0.1     winget\r\n' +
+      '2 upgrades available.\r\n'
+  );
+  process.env.SCRIPTCRAFT_WINGET_FIXTURE = winget;
   process.env.SCRIPTCRAFT_APPS_DRYRUN = '1';
 
   process.chdir(tmp);
@@ -59,6 +71,7 @@ before(async () => {
 after(() => {
   delete process.env.SCRIPTCRAFT_APPS_FIXTURE;
   delete process.env.SCRIPTCRAFT_APPS_DRYRUN;
+  delete process.env.SCRIPTCRAFT_WINGET_FIXTURE;
   server?.close();
   process.chdir(studioRoot);
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -108,4 +121,30 @@ test('open folder: only when the install folder exists', async () => {
   const ok = await api('POST', `/api/apps/${id('Good App')}/open-folder`);
   assert.equal(ok.data.folder, path.join(tmp, 'Good App'));
   assert.equal((await api('POST', `/api/apps/${id('Модный редактор')}/open-folder`)).status, 409);
+});
+
+test('updates: the winget table is parsed (localized header too), install only a listed id', async () => {
+  const { parseWingetUpgrade } = await import(pathToFileURL(path.join(studioRoot, 'api', 'apps.ts')).href);
+  const ru = [
+    'Имя        ИД            Версия Доступно Источник',
+    '---------------------------------------------------',
+    'Программа  Some.Program  1.0    1.1      winget',
+    '',
+  ].join('\n');
+  assert.deepEqual(parseWingetUpgrade(ru), [{ name: 'Программа', id: 'Some.Program', version: '1.0', available: '1.1', source: 'winget' }]);
+  assert.deepEqual(parseWingetUpgrade('No installed package found matching input criteria.'), []);
+
+  const { data } = await api('GET', '/api/apps/updates');
+  assert.equal(data.available, true);
+  assert.deepEqual(
+    data.updates.map((u: any) => [u.name, u.id, u.version, u.available]),
+    [
+      ['Good App', 'Good.App', '2.1', '2.2'],
+      ['Модный редактор', 'Mod.Editor', '5', '6.0.1'],
+    ]
+  );
+  const ok = await api('POST', '/api/apps/updates/Good.App/install');
+  assert.equal(ok.status, 200);
+  assert.deepEqual(ok.data.command.args.slice(0, 4), ['upgrade', '--id', 'Good.App', '--exact']);
+  assert.equal((await api('POST', '/api/apps/updates/Not.Listed/install')).status, 404);
 });

@@ -32,6 +32,12 @@ fs.writeFileSync(
 );
 process.env.SCRIPTCRAFT_APPS_FIXTURE = appsFixture;
 process.env.SCRIPTCRAFT_APPS_DRYRUN = '1';
+const wingetFixture = path.join(tmp, 'winget.txt');
+fs.writeFileSync(
+  wingetFixture,
+  ['Name       Id         Version Available Source', '-------------------------------------------------', 'Test App   Test.App   1.2.3   1.3.0     winget', '1 upgrades available.', ''].join('\n')
+);
+process.env.SCRIPTCRAFT_WINGET_FIXTURE = wingetFixture;
 
 const cleanup = () => {
   try {

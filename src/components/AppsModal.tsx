@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AppWindow, X, Search, RefreshCw, Wrench, FolderOpen, Loader2, TriangleAlert, CircleCheck } from 'lucide-react';
+import { AppWindow, X, Search, RefreshCw, Wrench, FolderOpen, Loader2, TriangleAlert, CircleCheck, ArrowUpCircle } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 
 // "Programs on this PC": installed applications (as in Windows "Programs and Features"),
@@ -21,6 +21,46 @@ interface InstalledApp {
 
 type SortKey = 'name' | 'size' | 'date';
 
+interface WingetUpdate {
+  name: string;
+  id: string;
+  version: string;
+  available: string;
+  source: string;
+}
+
+/** Does a winget row describe this installed program? (winget may shorten long names with "…") */
+const sameProgram = (app: string, upd: string) => {
+  const a = app.toLowerCase().trim();
+  const u = upd.toLowerCase().replace(/…$/, '').trim();
+  return a === u || (u.length >= 6 && a.startsWith(u)) || (a.length >= 6 && u.startsWith(a));
+};
+
+/** Read a run session's output until it exits. */
+async function readRun(runId: string, onText: (t: string) => void): Promise<number | null> {
+  const res = await fetch(`/api/run/${runId}/events`);
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return null;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '));
+      buf = buf.slice(i + 2);
+      if (!line) continue;
+      const ev = JSON.parse(line.slice(6));
+      if (ev.type === 'exit') {
+        reader.cancel().catch(() => {});
+        return ev.code;
+      }
+      if (typeof ev.data === 'string') onText(ev.data);
+    }
+  }
+}
+
 const fmtSize = (mb: number | null) => (mb === null ? '' : mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`);
 
 export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
@@ -34,6 +74,24 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   const [sort, setSort] = useState<SortKey>('name');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  // winget updates: null = not loaded yet
+  const [updates, setUpdates] = useState<WingetUpdate[] | null>(null);
+  const [wingetOk, setWingetOk] = useState(true);
+  const [onlyUpdates, setOnlyUpdates] = useState(false);
+  const [updating, setUpdating] = useState<string | null>(null);
+  const [updateLog, setUpdateLog] = useState('');
+
+  const loadUpdates = async () => {
+    setUpdates(null);
+    try {
+      const res = await fetch('/api/apps/updates');
+      const data = await res.json();
+      setWingetOk(data.available !== false);
+      setUpdates(data.updates || []);
+    } catch {
+      setUpdates([]);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -55,6 +113,7 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
     if (isOpen) {
       setNotice(null);
       void load();
+      void loadUpdates(); // slower (winget): loads alongside
     }
   }, [isOpen]);
 
@@ -84,6 +143,32 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
     }
   };
 
+  const updateFor = (app: InstalledApp) => updates?.find((u) => sameProgram(app.name, u.name)) || null;
+
+  const installUpdate = async (u: WingetUpdate) => {
+    if (!confirm(t('apps.confirmUpdate', { name: u.name, from: u.version, to: u.available }))) return;
+    setUpdating(u.id);
+    setNotice(null);
+    setUpdateLog('');
+    try {
+      const res = await fetch(`/api/apps/updates/${encodeURIComponent(u.id)}/install`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.dryRun) {
+        setNotice({ ok: true, text: `${data.command.exe} ${data.command.args.join(' ')}` });
+        return;
+      }
+      const code = await readRun(data.runId, (chunk) => setUpdateLog((l) => (l + chunk).slice(-20000)));
+      setNotice(code === 0 ? { ok: true, text: t('apps.updated', { name: u.name, version: u.available }) } : { ok: false, text: t('apps.updateFailed', { name: u.name }) });
+      void load();
+      void loadUpdates();
+    } catch (e: any) {
+      setNotice({ ok: false, text: e.message });
+    } finally {
+      setUpdating(null);
+    }
+  };
+
   const repair = (app: InstalledApp) => {
     const how = app.repair === 'msi' ? t('apps.howMsi') : t('apps.howModify');
     if (!confirm(t('apps.confirmRepair', { name: app.name, how }))) return;
@@ -102,7 +187,12 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
             {!loading && supported && <span className="text-slate-500 font-normal">({apps.length})</span>}
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={() => void load()} disabled={loading} className="p-1.5 text-slate-400 hover:text-fg rounded-lg hover:bg-slate-800 disabled:opacity-40" title={t('apps.refresh')}>
+            <button
+              onClick={() => {
+                void load();
+                void loadUpdates();
+              }}
+              disabled={loading} className="p-1.5 text-slate-400 hover:text-fg rounded-lg hover:bg-slate-800 disabled:opacity-40" title={t('apps.refresh')}>
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
             <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-fg rounded-lg hover:bg-slate-800">
@@ -130,6 +220,18 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           >
             <TriangleAlert className="w-3.5 h-3.5" /> {t('apps.onlyProblems', { count: problemCount })}
           </button>
+          {wingetOk && (
+            <button
+              onClick={() => setOnlyUpdates((v) => !v)}
+              disabled={updates === null}
+              data-apps-updates
+              className={`flex items-center gap-1 px-2 py-1.5 rounded border ${onlyUpdates ? 'border-emerald-500/60 text-emerald-300 bg-emerald-500/10' : 'border-slate-700 text-slate-300 hover:bg-hover'} disabled:opacity-60`}
+              title={t('apps.updatesTitle')}
+            >
+              {updates === null ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUpCircle className="w-3.5 h-3.5" />}
+              {updates === null ? t('apps.updatesChecking') : t('apps.updatesCount', { count: updates.length })}
+            </button>
+          )}
           <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="bg-deep border border-slate-700 rounded px-2 py-1.5 text-slate-200 focus:outline-none">
             <option value="name">{t('apps.sortName')}</option>
             <option value="size">{t('apps.sortSize')}</option>
@@ -143,6 +245,12 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           </div>
         )}
 
+        {updateLog && (
+          <pre className="mx-5 mt-2 max-h-32 overflow-auto text-[10px] font-mono text-slate-400 bg-deep border border-slate-800 rounded p-2 whitespace-pre-wrap" data-apps-update-log>
+            {updateLog}
+          </pre>
+        )}
+
         <div className="flex-1 min-h-0 overflow-auto px-5 py-2">
           {loading && apps.length === 0 && (
             <div className="flex items-center gap-2 text-xs text-slate-400 py-6 justify-center">
@@ -153,7 +261,32 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           {!supported && <p className="text-slate-400 text-xs py-6 text-center">{t('apps.unsupported')}</p>}
           {!loading && supported && !error && shown.length === 0 && <p className="text-slate-500 text-xs py-6 text-center">{t('apps.none')}</p>}
 
-          <div className="divide-y divide-slate-800/70">
+          {onlyUpdates && updates && (
+            <div className="divide-y divide-slate-800/70" data-apps-update-list>
+              {updates.length === 0 && <p className="text-slate-500 text-xs py-6 text-center">{t('apps.noUpdates')}</p>}
+              {updates.map((u) => (
+                <div key={u.id} className="py-2 flex items-center gap-3 text-xs" data-update-row={u.id}>
+                  <ArrowUpCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-fg truncate">{u.name}</div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      {u.version} → <span className="text-emerald-300">{u.available}</span> · {u.id}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void installUpdate(u)}
+                    disabled={!!updating}
+                    data-update-install
+                    className="flex items-center gap-1 px-2 py-1.5 rounded border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 shrink-0"
+                  >
+                    {updating === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUpCircle className="w-3.5 h-3.5" />} {t('apps.update')}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className={`divide-y divide-slate-800/70 ${onlyUpdates ? 'hidden' : ''}`}>
             {shown.map((a) => (
               <div key={a.id} className="py-2 flex items-start gap-3 text-xs" data-app-row={a.name}>
                 <div className="flex-1 min-w-0">
@@ -164,6 +297,11 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
                     </span>
                     {a.version && <span className="text-slate-500 font-mono shrink-0">{a.version}</span>}
                     {a.scope === 'user' && <span className="text-[10px] px-1 rounded bg-slate-800 text-slate-400 shrink-0">{t('apps.userScope')}</span>}
+                    {updateFor(a) && (
+                      <span className="text-[10px] px-1.5 rounded bg-emerald-500/15 text-emerald-300 shrink-0 font-mono" title={t('apps.updatesTitle')}>
+                        → {updateFor(a)!.available}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-0.5 pl-5 text-[11px] text-slate-500 flex flex-wrap gap-x-3">
                     {a.publisher && <span>{a.publisher}</span>}
