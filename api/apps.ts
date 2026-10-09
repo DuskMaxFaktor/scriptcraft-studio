@@ -107,7 +107,7 @@ export function exeOf(command: string | undefined): string | null {
   let exe: string;
   if (s.startsWith('"')) exe = s.slice(1, s.indexOf('"', 1) > 0 ? s.indexOf('"', 1) : undefined);
   else {
-    const m = /^(.*?\.(exe|com|bat|cmd|msi|ico|dll))\b/i.exec(s);
+    const m = /^(.*?\.(exe|com|bat|cmd|msi|ico|dll|vbs|vbe|js|jse|wsf|ps1|py|pyw|lnk))\b/i.exec(s);
     exe = m ? m[1] : s.split(' ')[0];
   }
   exe = exe.replace(/,-?\d+$/, '').trim();
@@ -323,6 +323,161 @@ appsRouter.post(
     if (process.env.SCRIPTCRAFT_APPS_DRYRUN === '1') return { dryRun: true, command: { exe: 'winget', args } };
     const proc = spawnCommand('winget', args, process.cwd());
     return { runId: startSession(proc, undefined, 30 * 60 * 1000) };
+  })
+);
+
+// ---------- startup programs ----------
+// Read from the Run registry keys and the Startup folders. Enabling / disabling is done the way Task Manager
+// does it — a flag in ...\Explorer\StartupApproved — so the entry itself is never deleted and the change is
+// fully reversible. Machine-wide entries need administrator rights to toggle.
+
+interface RawStartup {
+  Name: string;
+  Command: string;
+  Scope: 'user' | 'machine';
+  Kind: 'Run' | 'Run32' | 'StartupFolder';
+  State: number | null; // first byte of the StartupApproved value; odd = disabled, missing/even = enabled
+}
+
+export interface StartupItem {
+  id: string;
+  name: string;
+  command: string;
+  scope: 'user' | 'machine';
+  kind: 'Run' | 'Run32' | 'StartupFolder';
+  enabled: boolean;
+  problems: 'target-missing'[];
+}
+
+const APPROVED = 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved';
+const approvedKey = (s: RawStartup) => `${s.Scope === 'user' ? 'HKCU' : 'HKLM'}:\\${APPROVED}\\${s.Kind}`;
+
+const STARTUP_PS = `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$base = 'Software\\Microsoft\\Windows\\CurrentVersion'
+$sources = @(
+  @{ Scope = 'user';    Kind = 'Run';   Key = "HKCU:\\$base\\Run";   Approved = "HKCU:\\$base\\Explorer\\StartupApproved\\Run" },
+  @{ Scope = 'machine'; Kind = 'Run';   Key = "HKLM:\\$base\\Run";   Approved = "HKLM:\\$base\\Explorer\\StartupApproved\\Run" },
+  @{ Scope = 'machine'; Kind = 'Run32'; Key = "HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run"; Approved = "HKLM:\\$base\\Explorer\\StartupApproved\\Run32" }
+)
+function Approved($path, $name) {
+  try { $v = (Get-ItemProperty -Path $path -Name $name -ErrorAction Stop).$name } catch { return $null }
+  if ($v -is [byte[]] -and $v.Length -gt 0) { return [int]$v[0] }
+  return $null
+}
+$out = @()
+foreach ($s in $sources) {
+  $item = Get-Item -Path $s.Key -ErrorAction SilentlyContinue
+  if (-not $item) { continue }
+  foreach ($name in $item.GetValueNames()) {
+    if (-not $name) { continue }
+    $out += [pscustomobject]@{ Name = $name; Command = [string]$item.GetValue($name); Scope = $s.Scope; Kind = $s.Kind; State = (Approved $s.Approved $name) }
+  }
+}
+$folders = @(
+  @{ Scope = 'user';    Path = [Environment]::GetFolderPath('Startup');       Approved = "HKCU:\\$base\\Explorer\\StartupApproved\\StartupFolder" },
+  @{ Scope = 'machine'; Path = [Environment]::GetFolderPath('CommonStartup'); Approved = "HKLM:\\$base\\Explorer\\StartupApproved\\StartupFolder" }
+)
+foreach ($f in $folders) {
+  if (-not $f.Path -or -not (Test-Path $f.Path)) { continue }
+  Get-ChildItem -Path $f.Path -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'desktop.ini' } | ForEach-Object {
+    $target = $_.FullName
+    if ($_.Extension -eq '.lnk') { try { $target = (New-Object -ComObject WScript.Shell).CreateShortcut($_.FullName).TargetPath } catch {} }
+    $out += [pscustomobject]@{ Name = $_.Name; Command = $target; Scope = $f.Scope; Kind = 'StartupFolder'; State = (Approved $f.Approved $_.Name) }
+  }
+}
+@($out) | ConvertTo-Json -Depth 2 -Compress
+`;
+
+// The value is passed through environment variables, never pasted into the script
+const STARTUP_SET_PS = `
+$p = $env:SC_KEY; $n = $env:SC_NAME
+if (-not (Test-Path $p)) { New-Item -Path $p -Force -ErrorAction Stop | Out-Null }
+if ($env:SC_ENABLE -eq '1') { $v = [byte[]](2,0,0,0,0,0,0,0,0,0,0,0) }
+else { $v = [byte[]](3,0,0,0) + [BitConverter]::GetBytes((Get-Date).ToFileTime()) }
+Set-ItemProperty -Path $p -Name $n -Value ([byte[]]$v) -Type Binary -ErrorAction Stop
+`;
+
+function readStartupRaw(): Promise<RawStartup[]> {
+  const fixture = process.env.SCRIPTCRAFT_STARTUP_FIXTURE;
+  if (fixture) return Promise.resolve(JSON.parse(fs.readFileSync(fixture, 'utf-8')));
+  if (!isWin) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', STARTUP_PS], { windowsHide: true, timeout: 60_000, maxBuffer: 16 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
+      if (err) return reject(new Error('Cannot read the startup programs: ' + err.message));
+      const text = stdout.trim().replace(/^﻿/, '');
+      if (!text) return resolve([]);
+      try {
+        const data = JSON.parse(text);
+        resolve(Array.isArray(data) ? data : [data]);
+      } catch {
+        reject(new Error('Unexpected output while reading startup programs'));
+      }
+    });
+  });
+}
+
+const startupId = (s: RawStartup) => crypto.createHash('sha1').update(`${s.Scope}|${s.Kind}|${s.Name}`).digest('hex').slice(0, 16);
+const expandEnv = (p: string) => p.replace(/%([^%]+)%/g, (m, v) => process.env[v] ?? process.env[v.toUpperCase()] ?? m);
+
+async function listStartup(): Promise<{ items: StartupItem[]; raw: Map<string, RawStartup> }> {
+  const raw = new Map<string, RawStartup>();
+  const items: StartupItem[] = [];
+  for (const s of await readStartupRaw()) {
+    if (!s?.Name) continue;
+    const id = startupId(s);
+    raw.set(id, s);
+    // A Startup-folder shortcut's target is a plain path (no arguments, may contain spaces)
+    const exe = s.Kind === 'StartupFolder' ? String(s.Command || '').trim() || null : exeOf(s.Command);
+    const target = exe ? expandEnv(exe) : null;
+    const problems: StartupItem['problems'] = [];
+    // Only check full paths: a bare program name is looked up on PATH by Windows
+    if (target && /^([a-zA-Z]:\\|\\\\)/.test(target) && !fs.existsSync(target)) problems.push('target-missing');
+    items.push({ id, name: s.Name, command: String(s.Command || ''), scope: s.Scope, kind: s.Kind, enabled: s.State === null || s.State % 2 === 0, problems });
+  }
+  items.sort((a, b) => a.name.localeCompare(b.name));
+  return { items, raw };
+}
+
+appsRouter.get(
+  '/startup',
+  wrap(async () => {
+    if (!isWin && !process.env.SCRIPTCRAFT_STARTUP_FIXTURE) return { supported: false, items: [] };
+    return { supported: true, items: (await listStartup()).items };
+  })
+);
+
+/** Enable or disable one startup entry (reversible; the entry itself stays). */
+appsRouter.post(
+  '/startup/:id',
+  wrap(async (req) => {
+    const enable = req.body?.enabled === true;
+    const { raw } = await listStartup();
+    const entry = raw.get(String(req.params.id));
+    if (!entry) throw new AppsError(404, 'Startup entry not found (the list may have changed — refresh it)');
+    if (process.env.SCRIPTCRAFT_APPS_DRYRUN === '1') {
+      // Tests: record the change in the fixture so the list shows it
+      const fixture = process.env.SCRIPTCRAFT_STARTUP_FIXTURE;
+      if (fixture) {
+        const all: RawStartup[] = JSON.parse(fs.readFileSync(fixture, 'utf-8'));
+        for (const s of all) if (startupId(s) === startupId(entry)) s.State = enable ? 2 : 3;
+        fs.writeFileSync(fixture, JSON.stringify(all));
+      }
+      return { dryRun: true, key: approvedKey(entry), name: entry.Name, enabled: enable };
+    }
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', STARTUP_SET_PS],
+        { windowsHide: true, timeout: 30_000, env: { ...process.env, SC_KEY: approvedKey(entry), SC_NAME: entry.Name, SC_ENABLE: enable ? '1' : '0' } },
+        (err, _out, stderr) => {
+          if (!err) return resolve();
+          const denied = /denied|not allowed|UnauthorizedAccess|SecurityException/i.test(String(stderr) + String(err.message));
+          reject(new AppsError(denied ? 403 : 500, denied ? 'This entry is for all users: changing it needs administrator rights' : String(stderr).trim() || err.message));
+        }
+      );
+    });
+    return { ok: true, enabled: enable };
   })
 );
 

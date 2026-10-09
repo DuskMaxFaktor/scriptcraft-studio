@@ -38,6 +38,16 @@ fs.writeFileSync(
   ['Name       Id         Version Available Source', '-------------------------------------------------', 'Test App   Test.App   1.2.3   1.3.0     winget', '1 upgrades available.', ''].join('\n')
 );
 process.env.SCRIPTCRAFT_WINGET_FIXTURE = wingetFixture;
+// Startup entries: toggling only rewrites this file (dry run), never the real registry
+const startupFixture = path.join(tmp, 'startup.json');
+fs.writeFileSync(
+  startupFixture,
+  JSON.stringify([
+    { Name: 'Chat Helper', Command: `"${process.execPath}" --tray`, Scope: 'user', Kind: 'Run', State: null },
+    { Name: 'Old Updater', Command: `"${path.join(tmp, 'gone', 'updater.exe')}" /silent`, Scope: 'user', Kind: 'Run', State: 2 },
+  ])
+);
+process.env.SCRIPTCRAFT_STARTUP_FIXTURE = startupFixture;
 
 const cleanup = () => {
   try {

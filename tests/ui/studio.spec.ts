@@ -202,6 +202,23 @@ test('programs on this PC: search, problems filter, repair (dry run)', async ({ 
   await expect(modal.locator('[data-apps-notice]')).toContainText('winget upgrade --id Test.App --exact');
 });
 
+test('startup programs: listed, a leftover entry is flagged, switching off and on', async ({ page, request }) => {
+  await openStudio(page, request, 'Автозагрузка', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.locator('[data-open-apps]').click();
+  const modal = page.locator('[data-apps-modal]');
+  await modal.locator('[data-apps-tab="startup"]').click();
+  await expect(modal.locator('[data-startup-row]')).toHaveCount(2);
+  await expect(modal.locator('[data-startup-row="Old Updater"] [data-startup-problems]')).toContainText('нет файла программы');
+
+  const toggle = modal.locator('[data-startup-row="Old Updater"] [data-startup-toggle]');
+  await expect(toggle).toHaveText('Вкл');
+  await toggle.click();
+  await expect(toggle).toHaveText('Выкл');
+  await expect(modal.locator('[data-apps-notice]')).toContainText('больше не будет запускаться');
+  await toggle.click();
+  await expect(toggle).toHaveText('Вкл');
+});
+
 test('projects dialog creates and switches to a new project', async ({ page, request }) => {
   await openStudio(page, request, 'Первый', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
   await page.locator('button[title^="Мои проекты"]').click();

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AppWindow, X, Search, RefreshCw, Wrench, FolderOpen, Loader2, TriangleAlert, CircleCheck, ArrowUpCircle } from 'lucide-react';
+import { AppWindow, X, Search, RefreshCw, Wrench, FolderOpen, Loader2, TriangleAlert, CircleCheck, ArrowUpCircle, Power } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 
 // "Programs on this PC": installed applications (as in Windows "Programs and Features"),
@@ -20,6 +20,16 @@ interface InstalledApp {
 }
 
 type SortKey = 'name' | 'size' | 'date';
+
+interface StartupItem {
+  id: string;
+  name: string;
+  command: string;
+  scope: 'user' | 'machine';
+  kind: 'Run' | 'Run32' | 'StartupFolder';
+  enabled: boolean;
+  problems: 'target-missing'[];
+}
 
 interface WingetUpdate {
   name: string;
@@ -81,6 +91,41 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
   const [updating, setUpdating] = useState<string | null>(null);
   const [updateLog, setUpdateLog] = useState('');
 
+  // Startup programs
+  const [tab, setTab] = useState<'installed' | 'startup'>('installed');
+  const [startup, setStartup] = useState<StartupItem[] | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  const loadStartup = async () => {
+    try {
+      const res = await fetch('/api/apps/startup');
+      const data = await res.json();
+      setStartup(data.items || []);
+    } catch {
+      setStartup([]);
+    }
+  };
+
+  const toggleStartup = async (item: StartupItem) => {
+    setToggling(item.id);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/apps/startup/${item.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !item.enabled }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(res.status === 403 ? t('apps.startupNeedsAdmin') : data.error || `HTTP ${res.status}`);
+      setNotice({ ok: true, text: t(item.enabled ? 'apps.startupOff' : 'apps.startupOn', { name: item.name }) });
+      await loadStartup();
+    } catch (e: any) {
+      setNotice({ ok: false, text: e.message });
+    } finally {
+      setToggling(null);
+    }
+  };
+
   const loadUpdates = async () => {
     setUpdates(null);
     try {
@@ -114,6 +159,7 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
       setNotice(null);
       void load();
       void loadUpdates(); // slower (winget): loads alongside
+      void loadStartup();
     }
   }, [isOpen]);
 
@@ -191,6 +237,7 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
               onClick={() => {
                 void load();
                 void loadUpdates();
+                void loadStartup();
               }}
               disabled={loading} className="p-1.5 text-slate-400 hover:text-fg rounded-lg hover:bg-slate-800 disabled:opacity-40" title={t('apps.refresh')}>
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -201,6 +248,24 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
           </div>
         </div>
 
+        <div className="px-5 pt-2 flex gap-1 text-xs shrink-0 border-b border-slate-800">
+          {(
+            [
+              ['installed', t('apps.tabInstalled', { count: loading && apps.length === 0 ? '…' : apps.length })],
+              ['startup', t('apps.tabStartup', { count: startup === null ? '…' : startup.length })],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              data-apps-tab={id}
+              className={`px-3 py-1.5 border-b-2 -mb-px ${tab === id ? 'border-indigo-500 text-fg' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="px-5 py-2 border-b border-slate-800 flex flex-wrap items-center gap-2 text-xs shrink-0">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -208,11 +273,12 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('apps.search')}
+              placeholder={tab === 'startup' ? t('apps.searchStartup') : t('apps.search')}
               data-apps-search
               className="w-full bg-deep border border-slate-700 rounded pl-7 pr-2 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500"
             />
           </div>
+          {tab === 'installed' && (<>
           <button
             onClick={() => setOnlyProblems((v) => !v)}
             data-apps-problems
@@ -237,6 +303,7 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
             <option value="size">{t('apps.sortSize')}</option>
             <option value="date">{t('apps.sortDate')}</option>
           </select>
+          </>)}
         </div>
 
         {notice && (
@@ -252,6 +319,52 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
         )}
 
         <div className="flex-1 min-h-0 overflow-auto px-5 py-2">
+          {tab === 'startup' && (
+            <div className="divide-y divide-slate-800/70" data-startup-list>
+              {startup === null && (
+                <div className="flex items-center gap-2 text-xs text-slate-400 py-6 justify-center">
+                  <Loader2 className="w-4 h-4 animate-spin" /> {t('apps.loading')}
+                </div>
+              )}
+              {startup?.length === 0 && <p className="text-slate-500 text-xs py-6 text-center">{t('apps.startupNone')}</p>}
+              {startup
+                ?.filter((i) => !query.trim() || `${i.name} ${i.command}`.toLowerCase().includes(query.trim().toLowerCase()))
+                .map((i) => (
+                  <div key={i.id} className="py-2 flex items-start gap-3 text-xs" data-startup-row={i.name}>
+                    <Power className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${i.enabled ? 'text-emerald-400' : 'text-slate-600'}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`font-medium truncate ${i.enabled ? 'text-fg' : 'text-slate-500'}`}>{i.name}</span>
+                        <span className="text-[10px] px-1 rounded bg-slate-800 text-slate-400 shrink-0">{i.scope === 'user' ? t('apps.userScope') : t('apps.allUsers')}</span>
+                        {i.kind === 'StartupFolder' && <span className="text-[10px] px-1 rounded bg-slate-800 text-slate-400 shrink-0">{t('apps.startupFolder')}</span>}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-500 font-mono truncate" title={i.command}>
+                        {i.command}
+                      </div>
+                      {i.problems.length > 0 && (
+                        <div className="mt-1 flex gap-1" data-startup-problems>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300" title={t('apps.targetMissingHint')}>
+                            {t('apps.problem.target-missing')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => void toggleStartup(i)}
+                      disabled={toggling === i.id}
+                      data-startup-toggle
+                      className={`shrink-0 w-20 flex items-center justify-center gap-1 px-2 py-1.5 rounded border disabled:opacity-40 ${
+                        i.enabled ? 'border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/10' : 'border-slate-700 text-slate-400 hover:bg-hover'
+                      }`}
+                      title={i.enabled ? t('apps.startupDisableTitle') : t('apps.startupEnableTitle')}
+                    >
+                      {toggling === i.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : i.enabled ? t('apps.on') : t('apps.off')}
+                    </button>
+                  </div>
+                ))}
+            </div>
+          )}
+          {tab === 'installed' && (<>
           {loading && apps.length === 0 && (
             <div className="flex items-center gap-2 text-xs text-slate-400 py-6 justify-center">
               <Loader2 className="w-4 h-4 animate-spin" /> {t('apps.loading')}
@@ -348,8 +461,9 @@ export const AppsModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ 
               </div>
             ))}
           </div>
+          </>)}
         </div>
-        <div className="px-5 py-2 border-t border-slate-800 text-[11px] text-slate-500 shrink-0">{t('apps.footer')}</div>
+        <div className="px-5 py-2 border-t border-slate-800 text-[11px] text-slate-500 shrink-0">{tab === 'startup' ? t('apps.startupFooter') : t('apps.footer')}</div>
       </div>
     </div>
   );

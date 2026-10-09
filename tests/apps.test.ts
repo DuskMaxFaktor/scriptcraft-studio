@@ -54,6 +54,18 @@ before(async () => {
       '2 upgrades available.\r\n'
   );
   process.env.SCRIPTCRAFT_WINGET_FIXTURE = winget;
+  // Startup entries (as the registry / Startup folder reading returns them)
+  fs.mkdirSync(path.join(tmp, 'my scripts'));
+  fs.writeFileSync(path.join(tmp, 'my scripts', 'run me.vbs'), '');
+  fs.writeFileSync(
+    path.join(tmp, 'startup.json'),
+    JSON.stringify([
+      { Name: 'Helper', Command: `"${path.join(appDir, 'good.exe')}" --background`, Scope: 'user', Kind: 'Run', State: null },
+      { Name: 'OldTool', Command: 'C:\\nope\\old.exe -x', Scope: 'machine', Kind: 'Run', State: 3 },
+      { Name: 'Bot script.lnk', Command: path.join(tmp, 'my scripts', 'run me.vbs'), Scope: 'user', Kind: 'StartupFolder', State: 2 },
+    ])
+  );
+  process.env.SCRIPTCRAFT_STARTUP_FIXTURE = path.join(tmp, 'startup.json');
   process.env.SCRIPTCRAFT_APPS_DRYRUN = '1';
 
   process.chdir(tmp);
@@ -72,6 +84,7 @@ after(() => {
   delete process.env.SCRIPTCRAFT_APPS_FIXTURE;
   delete process.env.SCRIPTCRAFT_APPS_DRYRUN;
   delete process.env.SCRIPTCRAFT_WINGET_FIXTURE;
+  delete process.env.SCRIPTCRAFT_STARTUP_FIXTURE;
   server?.close();
   process.chdir(studioRoot);
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -147,4 +160,28 @@ test('updates: the winget table is parsed (localized header too), install only a
   assert.equal(ok.status, 200);
   assert.deepEqual(ok.data.command.args.slice(0, 4), ['upgrade', '--id', 'Good.App', '--exact']);
   assert.equal((await api('POST', '/api/apps/updates/Not.Listed/install')).status, 404);
+});
+
+test('startup programs: listed with their state, a missing target is flagged, toggling is reversible', async () => {
+  let { data } = await api('GET', '/api/apps/startup');
+  const byName = () => Object.fromEntries(data.items.map((i: any) => [i.name, i]));
+  let s = byName();
+  assert.equal(s['Helper'].enabled, true); // no StartupApproved value = enabled
+  assert.equal(s['OldTool'].enabled, false); // odd first byte = disabled
+  assert.equal(s['Bot script.lnk'].enabled, true);
+  assert.deepEqual(s['Helper'].problems, []);
+  assert.deepEqual(s['OldTool'].problems, ['target-missing']);
+  assert.deepEqual(s['Bot script.lnk'].problems, []); // a path with spaces, not cut at the first space
+
+  // Disable: the Task Manager flag in the per-user StartupApproved key (dry run in tests)
+  const res = await fetch(`${base}/api/apps/startup/${s['Helper'].id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
+  const off = await res.json();
+  assert.equal(off.key, String.raw`HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`);
+  assert.equal(off.enabled, false);
+  ({ data } = await api('GET', '/api/apps/startup'));
+  assert.equal(byName()['Helper'].enabled, false);
+
+  const machine = await fetch(`${base}/api/apps/startup/${s['OldTool'].id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) });
+  assert.equal((await machine.json()).key, String.raw`HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`);
+  assert.equal((await api('POST', '/api/apps/startup/0000000000000000')).status, 404);
 });
