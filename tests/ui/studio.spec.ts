@@ -171,6 +171,30 @@ test('project replace: one occurrence, undo, then replace in all files', async (
   await expect.poll(() => projectFile(request, project.id, 'b.py')).toBe('value = 2\n');
 });
 
+test('programs on this PC: search, problems filter, repair (dry run)', async ({ page, request }) => {
+  await openStudio(page, request, 'Программы', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.locator('[data-open-apps]').click();
+  const modal = page.locator('[data-apps-modal]');
+  await expect(modal.locator('[data-app-row]')).toHaveCount(2);
+
+  // Search narrows the list
+  await modal.locator('[data-apps-search]').fill('broken');
+  await expect(modal.locator('[data-app-row]')).toHaveCount(1);
+  await modal.locator('[data-apps-search]').fill('');
+
+  // "With problems" shows the broken entry and why
+  await modal.locator('[data-apps-problems]').click();
+  await expect(modal.locator('[data-app-row]')).toHaveCount(1);
+  await expect(modal.locator('[data-app-row="Broken Tool"] [data-app-problems]')).toContainText('нет деинсталлятора');
+  await modal.locator('[data-apps-problems]').click();
+
+  // Repair asks first, then starts the program's own repair (a dry run in tests)
+  page.once('dialog', (d) => d.accept());
+  await modal.locator('[data-app-row="Test App"] [data-app-repair]').click();
+  await expect(modal.locator('[data-apps-notice]')).toContainText('Ремонт «Test App» запущен');
+  await expect(modal.locator('[data-app-row="Broken Tool"] [data-app-repair]')).toHaveCount(0);
+});
+
 test('projects dialog creates and switches to a new project', async ({ page, request }) => {
   await openStudio(page, request, 'Первый', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
   await page.locator('button[title^="Мои проекты"]').click();

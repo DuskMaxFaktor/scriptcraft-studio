@@ -21,6 +21,18 @@ process.env.FAKE_GH_LOGGED = '1';
 process.env.FAKE_GH_REMOTES = path.join(tmp, 'remotes');
 fs.mkdirSync(process.env.FAKE_GH_REMOTES);
 
+// Installed programs: a fixed fake list, and repairs only report their command — never touch the real PC
+const appsFixture = path.join(tmp, 'apps.json');
+fs.writeFileSync(
+  appsFixture,
+  JSON.stringify([
+    { DisplayName: 'Test App', DisplayVersion: '1.2.3', Publisher: 'Test Inc', EstimatedSize: 10240, WindowsInstaller: 1, PSChildName: '{11111111-2222-3333-4444-555555555555}', Hive: 'HKLM' },
+    { DisplayName: 'Broken Tool', Publisher: 'Nobody', UninstallString: `"${path.join(tmp, 'missing', 'uninst.exe')}"`, NoRepair: 1, PSChildName: 'Broken', Hive: 'HKCU' },
+  ])
+);
+process.env.SCRIPTCRAFT_APPS_FIXTURE = appsFixture;
+process.env.SCRIPTCRAFT_APPS_DRYRUN = '1';
+
 const cleanup = () => {
   try {
     process.chdir(os.tmpdir());

@@ -19,6 +19,7 @@ import {
   Package,
   SlidersHorizontal,
   Braces,
+  AppWindow,
 } from 'lucide-react';
 import { Cpu as CpuIcon } from 'lucide-react';
 import { FileItem } from '../types.ts';
@@ -45,6 +46,7 @@ interface HeaderProps {
   /** Environment variables and arguments of the project's programs */
   onOpenRunConfig: () => void;
   onOpenSnippets: () => void;
+  onOpenApps: () => void;
   projectName: string;
   saveStatus: 'saving' | 'saved' | 'error' | 'idle';
   onOpenProjects: () => void;
@@ -66,6 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
   onBuildExe,
   onOpenRunConfig,
   onOpenSnippets,
+  onOpenApps,
   projectName,
   saveStatus,
   onOpenProjects,
@@ -255,6 +258,16 @@ export const Header: React.FC<HeaderProps> = ({
           title={t('snip.open')}
         >
           <Braces className="w-4 h-4" />
+        </button>
+
+        {/* Programs installed on this PC */}
+        <button
+          onClick={onOpenApps}
+          data-open-apps
+          className="p-1.5 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-300 hover:text-fg transition-colors"
+          title={t('apps.open')}
+        >
+          <AppWindow className="w-4 h-4" />
         </button>
 
         {/* Debug Button */}
