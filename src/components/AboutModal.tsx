@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Info, X, RefreshCw, Download, ExternalLink, Loader2, CheckCircle2, Copy, Save, FolderOpen, MessageSquareWarning } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import { checkForUpdates, useUpdateInfo } from '../updates.ts';
@@ -6,7 +6,9 @@ import { askConfirm } from '../dialogs.tsx';
 
 // "About ScriptCraft Studio": version and updates, reporting a problem.
 
-type Tab = 'updates' | 'report';
+export type Tab = 'help' | 'updates' | 'report';
+
+const MarkdownPreview = lazy(() => import('./MarkdownPreview.tsx').then((m) => ({ default: m.MarkdownPreview })));
 
 interface Status {
   version: string;
@@ -15,7 +17,7 @@ interface Status {
   autoCheck: boolean;
 }
 
-export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initialTab?: Tab }> = ({ isOpen, onClose, initialTab = 'updates' }) => {
+export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initialTab?: Tab; onShowTour?: () => void }> = ({ isOpen, onClose, initialTab = 'help', onShowTour }) => {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>(initialTab);
   useEffect(() => {
@@ -95,7 +97,11 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onMouseDown={onClose}>
-      <div className="bg-raised border border-slate-700 rounded-xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[90vh]" onMouseDown={(e) => e.stopPropagation()} data-about>
+      <div
+        className={`bg-raised border border-slate-700 rounded-xl w-full ${tab === 'help' ? 'max-w-4xl h-[85vh]' : 'max-w-lg max-h-[90vh]'} shadow-2xl overflow-hidden flex flex-col`}
+        onMouseDown={(e) => e.stopPropagation()}
+        data-about
+      >
         <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between bg-modal">
           <div className="flex items-center gap-2 text-sm font-semibold text-fg">
             <Info className="w-4 h-4 text-indigo-400" />
@@ -106,7 +112,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
           </button>
         </div>
 
-        <div className="p-5 space-y-4 overflow-auto text-xs">
+        <div className={`p-5 space-y-4 text-xs flex-1 min-h-0 ${tab === 'help' ? 'flex flex-col' : 'overflow-auto'}`}>
           <div>
             <div className="text-base font-semibold text-fg">ScriptCraft Studio</div>
             <div className="text-slate-400" data-about-version>
@@ -116,7 +122,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
           </div>
 
           <div className="flex gap-1 border-b border-slate-800">
-            {(['updates', 'report'] as Tab[]).map((id) => (
+            {(['help', 'updates', 'report'] as Tab[]).map((id) => (
               <button
                 key={id}
                 onClick={() => setTab(id)}
@@ -128,6 +134,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
             ))}
           </div>
 
+          {tab === 'help' && <HelpSection onShowTour={onShowTour} />}
           {tab === 'report' && <ReportSection repo={status?.repo || ''} />}
 
           {tab === 'updates' && (
@@ -271,5 +278,42 @@ const ReportSection: React.FC<{ repo: string }> = ({ repo }) => {
         </>
       )}
     </section>
+  );
+};
+
+/** The help text (public/help/<lang>.md) with a table of contents. */
+const HelpSection: React.FC<{ onShowTour?: () => void }> = ({ onShowTour }) => {
+  const { t, lang } = useI18n();
+  const [text, setText] = useState('');
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    fetch(`/help/${lang === 'en' ? 'en' : 'ru'}.md`)
+      .then((r) => (r.ok ? r.text() : Promise.reject()))
+      .then(setText)
+      .catch(() => setText(t('help.missing')));
+  }, [lang]);
+  const headings = [...text.matchAll(/^## (.+)$/gm)].map((m) => m[1].trim());
+  const jump = (h: string) => {
+    const el = [...(body.current?.querySelectorAll('h2') || [])].find((x) => x.textContent?.trim() === h);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  return (
+    <div className="flex gap-4 flex-1 min-h-0" data-help>
+      <nav className="w-48 shrink-0 overflow-auto space-y-0.5 border-r border-slate-800 pr-2">
+        {headings.map((h) => (
+          <button key={h} onClick={() => jump(h)} className="block w-full text-left px-2 py-1 rounded text-slate-300 hover:bg-slate-800 hover:text-fg" data-help-link>
+            {h}
+          </button>
+        ))}
+        {onShowTour && (
+          <button onClick={onShowTour} className="block w-full text-left px-2 py-1 mt-2 rounded text-indigo-300 hover:bg-slate-800" data-help-tour>
+            {t('help.tour')}
+          </button>
+        )}
+      </nav>
+      <div ref={body} className="flex-1 min-w-0 overflow-auto pr-2 text-sm">
+        <Suspense fallback={<Loader2 className="w-4 h-4 animate-spin text-slate-500" />}>{text && <MarkdownPreview content={text} />}</Suspense>
+      </div>
+    </div>
   );
 };

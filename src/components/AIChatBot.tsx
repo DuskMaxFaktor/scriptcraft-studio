@@ -619,7 +619,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
   const waitingForFirstToken = isLoading && !agentMode && lastMessage?.role === 'model' && !lastMessage.text;
 
   return (
-    <div className="w-full border-l border-slate-800 bg-side flex flex-col h-full select-none">
+    <div className="w-full border-l border-slate-800 bg-side flex flex-col h-full select-none" data-tour="chat">
       {/* Top Header */}
       <div className="px-3 py-2.5 bg-bar border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-2">

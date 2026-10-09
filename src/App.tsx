@@ -54,6 +54,12 @@ export default function App() {
   const [splitWidth, setSplitWidth] = usePersistentSize('scriptcraft-split-width', 520);
   const [isHotkeysOpen, setIsHotkeysOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
+  const [aboutTab, setAboutTab] = useState<'help' | 'updates' | 'report'>('updates');
+  const openAbout = (tab: 'help' | 'updates' | 'report') => {
+    setAboutTab(tab);
+    setIsAboutOpen(true);
+  };
+  const [showWelcome, setShowWelcome] = useState(false);
   // Quiet daily look for a new version
   useEffect(() => {
     const timer = setTimeout(() => import('./updates.ts').then((u) => u.autoCheckForUpdates()), 4000);
@@ -831,6 +837,12 @@ export default function App() {
         if (target) {
           openProjectData(await projectsApi.get(target.id));
         } else {
+          // The very first start: a short tour once the studio is drawn
+          try {
+            if (!localStorage.getItem('scriptcraft-welcome-done')) setTimeout(() => setShowWelcome(true), 600);
+          } catch {
+            /* storage unavailable */
+          }
           const tpl = TEMPLATE_PROJECTS[0];
           const label = t(`tpl.${tpl.id}`);
           openProjectData(
@@ -1157,7 +1169,8 @@ export default function App() {
         onOpenProjects={() => setIsProjectsOpen(true)}
         runTargetName={runTarget?.name || null}
         onShowHotkeys={() => setIsHotkeysOpen(true)}
-        onOpenAbout={() => setIsAboutOpen(true)}
+        onOpenAbout={() => openAbout('updates')}
+        onOpenHelp={() => openAbout('help')}
         onOpenAiSettings={() => setIsAiSettingsOpen(true)}
       />
 
@@ -1363,7 +1376,15 @@ export default function App() {
       <SnippetsModal isOpen={isSnippetsOpen} onClose={() => setIsSnippetsOpen(false)} />
       </Deferred>
       <Deferred when={isAboutOpen}>
-        <AboutModal isOpen={isAboutOpen} onClose={() => setIsAboutOpen(false)} />
+        <AboutModal isOpen={isAboutOpen} onClose={() => setIsAboutOpen(false)} initialTab={aboutTab}
+          onShowTour={() => {
+            setIsAboutOpen(false);
+            setShowWelcome(true);
+          }}
+        />
+      </Deferred>
+      <Deferred when={showWelcome}>
+        {showWelcome && <WelcomeTour onClose={() => setShowWelcome(false)} onOpenHelp={() => openAbout('help')} />}
       </Deferred>
       <Deferred when={isHotkeysOpen}>
       <HotkeysModal isOpen={isHotkeysOpen} onClose={() => setIsHotkeysOpen(false)} />
@@ -1431,6 +1452,7 @@ const PackagesModal = lazyNamed(() => import('./components/PackagesModal.tsx'), 
 const HistoryModal = lazyNamed(() => import('./components/HistoryModal.tsx'), 'HistoryModal');
 const HotkeysModal = lazyNamed(() => import('./components/HotkeysModal.tsx'), 'HotkeysModal');
 const AboutModal = lazyNamed(() => import('./components/AboutModal.tsx'), 'AboutModal');
+const WelcomeTour = lazyNamed(() => import('./components/WelcomeTour.tsx'), 'WelcomeTour');
 const SnippetsModal = lazyNamed(() => import('./components/SnippetsModal.tsx'), 'SnippetsModal');
 const AppsModal = lazyNamed(() => import('./components/AppsModal.tsx'), 'AppsModal');
 const AiSettingsModal = lazyNamed(() => import('./components/AiSettingsModal.tsx'), 'AiSettingsModal');

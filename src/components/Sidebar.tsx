@@ -336,6 +336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
+      data-tour="explorer"
       className={`w-full h-full border-r bg-side flex flex-col justify-between select-none transition-colors ${
         isDragOver ? 'border-indigo-500 bg-indigo-950/20' : 'border-slate-800'
       }`}

@@ -238,6 +238,7 @@ export const ExecutionPanel: React.FC<ExecutionPanelProps> = ({
 
   return (
     <div 
+      data-tour="panel"
       className="border-t border-slate-800 bg-bar flex flex-col shrink-0"
       style={{ height: collapsed ? 37 : height }}
     >

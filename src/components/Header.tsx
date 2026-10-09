@@ -21,6 +21,7 @@ import {
   Braces,
   AppWindow,
   Info,
+  HelpCircle,
 } from 'lucide-react';
 import { Cpu as CpuIcon } from 'lucide-react';
 import { FileItem } from '../types.ts';
@@ -38,6 +39,7 @@ interface HeaderProps {
   runTargetName: string | null;
   onShowHotkeys: () => void;
   onOpenAbout: () => void;
+  onOpenHelp: () => void;
   /** Start debugging the run target (Python / JavaScript) */
   onDebug: () => void;
   canDebug: boolean;
@@ -64,6 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
   runTargetName,
   onShowHotkeys,
   onOpenAbout,
+  onOpenHelp,
   onDebug,
   canDebug,
   onOpenAiSettings,
@@ -216,6 +219,16 @@ export const Header: React.FC<HeaderProps> = ({
           <Keyboard className="w-3.5 h-3.5" />
         </button>
 
+        {/* Help */}
+        <button
+          onClick={onOpenHelp}
+          className="p-1.5 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-300 hover:text-fg transition-colors"
+          title={t('help.title')}
+          data-open-help
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+        </button>
+
         {/* About: version, updates (a dot when a new version is out) */}
         <button
           onClick={onOpenAbout}
@@ -312,6 +325,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         ) : (
           <button
+            data-tour="run"
             onClick={onRun}
             disabled={isRunning || !activeFile}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-xs font-semibold shadow-md transition-all ${

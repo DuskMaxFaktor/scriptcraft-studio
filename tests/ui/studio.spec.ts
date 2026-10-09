@@ -696,6 +696,31 @@ test('risky code: a warning before the run, Cancel keeps it from running, the an
   await expect(dialog).toHaveCount(0);
 });
 
+test('help: contents jump to a section; the tour walks through the studio and closes with Esc', async ({ page, request }) => {
+  await openStudio(page, request, 'Справка', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.locator('[data-open-help]').click();
+  const help = page.locator('[data-help]');
+  await expect(help.locator('h1')).toHaveText('Справка ScriptCraft Studio');
+  await help.locator('[data-help-link]', { hasText: 'Отладка' }).click();
+  await expect(help.locator('h2', { hasText: 'Отладка' })).toBeInViewport();
+
+  await help.locator('[data-help-tour]').click();
+  const tour = page.locator('[data-tour-overlay]');
+  await expect(tour).toContainText('Добро пожаловать');
+  await expect(tour.locator('[data-tour-safety]')).toContainText('с вашими правами');
+  await tour.locator('[data-tour-next]').click();
+  await expect(tour).toContainText('Файлы проекта');
+  // The card stays inside the window next to the highlighted explorer
+  const box = await tour.locator('[data-tour-step]').boundingBox();
+  expect(box!.x).toBeGreaterThan(0);
+  expect(box!.x + box!.width).toBeLessThan(1440);
+  await tour.locator('[data-tour-next]').click();
+  await expect(tour).toContainText('Запуск');
+  await page.keyboard.press('Escape');
+  await expect(tour).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('scriptcraft-welcome-done'))).toBe('1');
+});
+
 test('tests tab: coverage paints run / not-run lines in the editor', async ({ page, request }) => {
   test.skip(spawnSync('python', ['-c', 'import pytest']).status !== 0, 'pytest not installed');
   await openStudio(page, request, 'Покрытие', [
