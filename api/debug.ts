@@ -14,6 +14,17 @@ import { prepareRun, attachPackages, cleanup, spawnCommand, startSession, type P
 export interface Breakpoint {
   line: number;
   condition?: string;
+  /** Logpoint: print this message ({expr} parts are evaluated) instead of stopping */
+  log?: string;
+}
+
+/** A Node logpoint as a CDP condition: log the message, then return false so the program never stops. */
+function nodeLogCondition(log: string): string {
+  const parts = log.split(/(\{[^{}]+\})/);
+  const body = parts
+    .map((p) => (/^\{[^{}]+\}$/.test(p) ? '${(' + p.slice(1, -1) + ')}' : p.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${')))
+    .join('');
+  return `(console.log(\`${body}\`), false)`;
 }
 type Breakpoints = Record<string, Breakpoint[]>; // project file path -> breakpoints
 
@@ -27,7 +38,8 @@ function normalizeBreakpoints(raw: unknown): Breakpoints {
       const line = Number(typeof item === 'object' && item ? (item as any).line : item);
       if (!Number.isInteger(line) || line <= 0) continue;
       const condition = typeof item === 'object' && item && typeof (item as any).condition === 'string' ? (item as any).condition.trim().slice(0, 1000) : '';
-      bps.push(condition ? { line, condition } : { line });
+      const log = typeof item === 'object' && item && typeof (item as any).log === 'string' ? (item as any).log.slice(0, 1000) : '';
+      bps.push({ line, ...(condition ? { condition } : {}), ...(log.trim() ? { log } : {}) });
     }
     out[file] = bps;
   }
@@ -186,7 +198,7 @@ function startNode(s: DebugSession, root: string, entryAbs: string, bps: Breakpo
         const r = await send('Debugger.setBreakpointByUrl', {
           lineNumber: bp.line - 1,
           urlRegex: `^${ciPattern(url)}$`,
-          ...(bp.condition ? { condition: bp.condition } : {}),
+          ...(bp.log ? { condition: nodeLogCondition(bp.log) } : bp.condition ? { condition: bp.condition } : {}),
         });
         if (r?.breakpointId) breakpointIds.push(r.breakpointId);
       }

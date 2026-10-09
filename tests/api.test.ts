@@ -496,6 +496,31 @@ for (const [language, p] of Object.entries(debugProjects)) {
   });
 }
 
+// A logpoint prints a message (with {expr} values) and never stops the program
+for (const [language, p] of Object.entries(debugProjects)) {
+  test(`debugger (${language}): a logpoint prints values without stopping`, { skip: language === 'python' && !hasPython && 'python not installed' }, async () => {
+    const entry = p.files.find((f) => f.name === p.entry)!;
+    const { line } = condBreakpoints[language as 'python' | 'javascript'];
+    const { data } = await api('POST', '/api/debug/start', {
+      language,
+      code: entry.content,
+      files: p.files,
+      entry: p.entry,
+      breakpoints: { [p.entry]: [{ line, log: 'LP v={v} total={total}' }] },
+    });
+    assert.ok(data.runId, JSON.stringify(data));
+    const next = await debugEvents(data.runId);
+    const { out, exit } = await readSession(data.runId);
+    assert.equal(exit?.code, 0, out);
+    // Logged on every pass of the loop, and the program still prints its result
+    assert.match(out, /LP v=1 total=0/);
+    assert.match(out, /LP v=2 total=2/);
+    assert.match(out, /LP v=3 total=6/);
+    assert.match(out, /result 12/);
+    assert.equal((await next()).event, 'terminated'); // never paused
+  });
+}
+
 // ---------------- web preview ----------------
 
 test('web preview: serves project files as a site on its own port, safely', async () => {

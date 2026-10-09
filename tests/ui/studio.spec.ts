@@ -435,6 +435,34 @@ test('debugger: a conditional breakpoint stops on the right iteration and watche
   await expect(page.locator('[data-debug-start]')).toBeEnabled({ timeout: 20_000 });
 });
 
+test('debugger: hovering a variable shows its value; a logpoint prints without stopping', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const code = 'total = 0\nfor v in [1, 2, 3]:\n    total += v * 2\nprint(total)\n';
+  const project = (await (await request.post('/api/projects', { data: { name: 'Наведение', files: [{ name: 'main.py', language: 'python', content: code, isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => {
+    localStorage.setItem('scriptcraft-last-project', id);
+    localStorage.setItem(
+      'scriptcraft-bp-' + id,
+      JSON.stringify({ 'main.py': [{ line: 3, condition: 'v == 2' }, { line: 4, log: 'final={total}' }] })
+    );
+  }, project.id);
+  await page.goto('/');
+  await expect(page.locator('.monaco-editor').first()).toBeVisible();
+  await page.locator('[data-debug-start]').click();
+  await expect(page.getByText(/Остановка на точке останова: main\.py:3/)).toBeVisible({ timeout: 30_000 });
+
+  // Hover "total" on line 1: the tooltip shows its value at this pause
+  const token = page.locator('.monaco-editor .view-lines span span', { hasText: /^total$/ }).first();
+  await token.hover();
+  await expect(page.locator('.monaco-hover', { hasText: /total\s*=\s*2/ }).first()).toBeVisible({ timeout: 10_000 });
+
+  // Continue: the logpoint on line 4 prints and the program runs to the end without another pause
+  await page.getByRole('button', { name: 'Продолжить', exact: true }).click();
+  await expect(page.locator('[data-debug-start]')).toBeEnabled({ timeout: 20_000 });
+  await page.getByText('Терминал', { exact: true }).first().click();
+  await expect(output(page)).toContainText('final=12');
+});
+
 test('notebook: markdown renders and a code cell runs against a stateful kernel', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
   const ipynb = JSON.stringify({

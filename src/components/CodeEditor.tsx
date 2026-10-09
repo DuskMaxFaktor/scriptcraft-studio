@@ -59,6 +59,8 @@ interface CodeEditorProps {
   onBreakpointsChange?: (bps: Breakpoint[]) => void;
   /** Line where the debugger is paused in the active file */
   debugLine?: number | null;
+  /** While paused: evaluate an expression for the hover tooltip ("name = value"), or null */
+  onDebugHover?: (expr: string) => Promise<string | null>;
   /** Current project (its pyproject.toml / .prettierrc settings apply to formatting) */
   projectId?: string | null;
   /** Install Ruff (formatter and checks) or Jedi (completions, hints); output goes to the terminal */
@@ -100,6 +102,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   breakpoints = [],
   onBreakpointsChange,
   debugLine = null,
+  onDebugHover,
   projectId = null,
   onInstallTool,
   onOpenFileAt,
@@ -168,6 +171,37 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const bpPropsRef = useRef({ breakpoints, onBreakpointsChange, debugLine });
   bpPropsRef.current = { breakpoints, onBreakpointsChange, debugLine };
 
+  // Hover a variable while the debugger is paused: show its current value
+  const debugHoverRef = useRef(onDebugHover);
+  debugHoverRef.current = onDebugHover;
+  useEffect(() => {
+    const disposables = ['python', 'javascript'].map((lang) =>
+      monaco.languages.registerHoverProvider(lang, {
+        async provideHover(model, position) {
+          const evaluate = debugHoverRef.current;
+          if (!evaluate) return null;
+          // The dotted expression under the cursor: obj.attr.name
+          const text = model.getLineContent(position.lineNumber);
+          const col = position.column - 1;
+          const isId = (ch: string) => /[\w$.]/.test(ch);
+          let start = col;
+          let end = col;
+          while (start > 0 && isId(text[start - 1])) start--;
+          while (end < text.length && /[\w$]/.test(text[end])) end++;
+          const expr = text.slice(start, end).replace(/^\.+|\.+$/g, '');
+          if (!expr || !/^[A-Za-z_$]/.test(expr)) return null;
+          const value = await evaluate(expr);
+          if (value === null) return null;
+          return {
+            range: new monaco.Range(position.lineNumber, start + 1, position.lineNumber, end + 1),
+            contents: [{ value: '`' + expr + '` = `' + value.replace(/`/g, "'") + '`' }],
+          };
+        },
+      })
+    );
+    return () => disposables.forEach((d) => d.dispose());
+  }, []);
+
   const applyDecorations = () => {
     const editor = editorRef.current;
     if (!editor || !bpCollectionRef.current || !debugCollectionRef.current) return;
@@ -176,8 +210,14 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       bps.map((bp) => ({
         range: new monaco.Range(bp.line, 1, bp.line, 1),
         options: {
-          glyphMarginClassName: bp.condition ? 'sc-breakpoint sc-breakpoint-cond' : 'sc-breakpoint',
-          glyphMarginHoverMessage: { value: bp.condition ? t('debug.breakpointCondHover', { cond: bp.condition }) : t('debug.breakpointHover') },
+          glyphMarginClassName: bp.log ? 'sc-logpoint' : bp.condition ? 'sc-breakpoint sc-breakpoint-cond' : 'sc-breakpoint',
+          glyphMarginHoverMessage: {
+            value: bp.log
+              ? t('debug.logpointHover', { msg: bp.log })
+              : bp.condition
+                ? t('debug.breakpointCondHover', { cond: bp.condition })
+                : t('debug.breakpointHover'),
+          },
           stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         },
       }))
@@ -194,7 +234,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     );
   };
 
-  const bpKey = breakpoints.map((b) => (b.condition ? `${b.line}:${b.condition}` : `${b.line}`)).join(',');
+  const bpKey = breakpoints.map((b) => `${b.line}:${b.condition || ''}:${b.log || ''}`).join(',');
   useEffect(() => {
     applyDecorations();
     if (debugLine) editorRef.current?.revealLineInCenterIfOutsideViewport(debugLine);
@@ -250,11 +290,15 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       if (e.event.rightButton) {
         e.event.preventDefault();
         const existing = bps.find((b) => b.line === line);
-        const cond = window.prompt(t('debug.conditionPrompt'), existing?.condition || '');
-        if (cond === null) return; // cancelled: no change
-        const trimmed = cond.trim();
+        const current = existing?.log ? `log: ${existing.log}` : existing?.condition || '';
+        const answer = window.prompt(t('debug.conditionPrompt'), current);
+        if (answer === null) return; // cancelled: no change
+        const trimmed = answer.trim();
         const rest = bps.filter((b) => b.line !== line);
-        change([...rest, { line, ...(trimmed ? { condition: trimmed } : {}) }].sort((a, b) => a.line - b.line));
+        // "log: message {x}" makes a logpoint; anything else is a condition (empty = plain breakpoint)
+        const logMatch = /^log:\s*(.+)$/is.exec(trimmed);
+        const bp = logMatch ? { line, log: logMatch[1] } : { line, ...(trimmed ? { condition: trimmed } : {}) };
+        change([...rest, bp].sort((a, b) => a.line - b.line));
         return;
       }
       change(bps.some((b) => b.line === line) ? bps.filter((b) => b.line !== line) : [...bps, { line }].sort((a, b) => a.line - b.line));
@@ -265,12 +309,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       const { breakpoints: bps, onBreakpointsChange: change } = bpPropsRef.current;
       if (!coll || !change) return;
       const ranges = coll.getRanges();
-      const moved: { line: number; condition?: string }[] = ranges.map((r, i) => ({ line: r.startLineNumber, ...(bps[i]?.condition ? { condition: bps[i].condition } : {}) }));
+      const moved: Breakpoint[] = ranges.map((r, i) => ({
+        line: r.startLineNumber,
+        ...(bps[i]?.condition ? { condition: bps[i].condition } : {}),
+        ...(bps[i]?.log ? { log: bps[i].log } : {}),
+      }));
       // Collapse duplicates that may appear if two breakpoints end up on the same line
-      const byLine = new Map<number, { line: number; condition?: string }>();
+      const byLine = new Map<number, Breakpoint>();
       for (const b of moved) if (!byLine.has(b.line)) byLine.set(b.line, b);
       const next = [...byLine.values()].sort((a, b) => a.line - b.line);
-      const key = (list: typeof next) => list.map((b) => (b.condition ? `${b.line}:${b.condition}` : `${b.line}`)).join(',');
+      const key = (list: Breakpoint[]) => list.map((b) => `${b.line}:${b.condition || ''}:${b.log || ''}`).join(',');
       if (key(next) !== key(bps)) change(next);
     });
     editor.onDidChangeModelContent(() => {

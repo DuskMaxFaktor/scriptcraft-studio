@@ -95,6 +95,10 @@ class StudioDebugger(bdb.Bdb):
                 if isinstance(item, dict):
                     line = item.get("line")
                     cond = item.get("condition") or None
+                    log = item.get("log")
+                    if log:
+                        # Logpoint: print the message ({expr} is an f-string field) and never stop
+                        cond = "print(f" + repr(str(log)) + ", flush=True) or False"
                 else:
                     line = item
                     cond = None

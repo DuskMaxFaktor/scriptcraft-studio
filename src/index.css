@@ -369,6 +369,14 @@ body.resizing-y iframe {
   cursor: pointer;
 }
 /* Conditional breakpoint: an amber dot with a ring, so it reads differently from a plain one */
+/* Logpoint: a blue diamond (prints a message, never stops) */
+.monaco-editor .sc-logpoint {
+  background: linear-gradient(45deg, transparent 32%, #3b82f6 32% 68%, transparent 68%), linear-gradient(-45deg, transparent 32%, #3b82f6 32% 68%, transparent 68%);
+  background-size: 11px 11px;
+  background-position: center;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
 .monaco-editor .sc-breakpoint-cond {
   background: radial-gradient(circle at center, #f5a623 0 3px, transparent 3.5px, #f5a623 4px 5px, transparent 5.5px);
 }

@@ -181,6 +181,24 @@ export default function App() {
   breakpointsRef.current = breakpoints;
   const [debugUi, setDebugUi] = useState<DebugUiState | null>(null);
   const debugRef = useRef<DebugSessionHandle | null>(null);
+  // Hover evaluations waiting for their evalResult (expr -> resolver)
+  const hoverPendingRef = useRef<Map<string, (value: string | null) => void>>(new Map());
+  const evaluateForHover = useCallback((expr: string) => {
+    const handle = debugRef.current;
+    if (!handle) return Promise.resolve(null);
+    return new Promise<string | null>((resolve) => {
+      hoverPendingRef.current.get(expr)?.(null); // a newer hover replaces an unanswered one
+      const timer = setTimeout(() => {
+        hoverPendingRef.current.delete(expr);
+        resolve(null);
+      }, 1500);
+      hoverPendingRef.current.set(expr, (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      });
+      handle.evaluate(expr);
+    });
+  }, []);
   // Watch expressions per project (evaluated at every pause)
   const [watches, setWatches] = useState<string[]>([]);
   const watchesRef = useRef<string[]>([]);
@@ -301,14 +319,22 @@ export default function App() {
           setExecutionTab('debug');
         },
         onRunning: () => setDebugUi((prev) => (prev ? { ...prev, status: 'running' } : prev)),
-        onEval: (r) =>
+        onEval: (r) => {
+          // An answer for the hover tooltip: resolve it and keep it out of the evaluate history
+          const hover = hoverPendingRef.current.get(r.expr);
+          if (hover) {
+            hoverPendingRef.current.delete(r.expr);
+            hover(r.error ? null : (r.value ?? null));
+            return;
+          }
           setDebugUi((prev) =>
             prev
               ? watchesRef.current.includes(r.expr)
                 ? { ...prev, watchResults: { ...prev.watchResults, [r.expr]: r } }
                 : { ...prev, evals: [...prev.evals, r] }
               : prev
-          ),
+          );
+        },
       });
       debugRef.current = handle;
       setActiveRun(handle.run);
@@ -1186,6 +1212,7 @@ export default function App() {
               breakpoints={activeFile ? breakpoints[activeFile.name] || [] : []}
               onBreakpointsChange={(bps) => activeFile && updateBreakpoints(activeFile.name, bps)}
               debugLine={debugUi?.status === 'paused' && debugUi.stopped?.file === activeFile?.name ? debugUi.stopped.line : null}
+              onDebugHover={debugUi?.status === 'paused' ? evaluateForHover : undefined}
               activeFile={activeFile}
               onUpdateContent={handleUpdateFileContent}
               onSelectFile={(id) => setActiveFileId(id)}

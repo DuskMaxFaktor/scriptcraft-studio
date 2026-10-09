@@ -5,6 +5,8 @@ import { attachRunStream, InteractiveRun } from './interactiveRun.ts';
 export interface Breakpoint {
   line: number;
   condition?: string;
+  /** Logpoint: print this message ({expr} parts are evaluated) instead of stopping */
+  log?: string;
 }
 export type Breakpoints = Record<string, Breakpoint[]>;
 
