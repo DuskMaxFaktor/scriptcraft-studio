@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import fs from 'fs';
 import crypto from 'crypto';
 import path from 'path';
@@ -451,6 +451,39 @@ projectsRouter.get(
   '/:id/assets',
   wrap((req) => ({ assets: listAssets(req.params.id) }))
 );
+
+/**
+ * Put a binary file from the PC (an .exe to disassemble, a picture, a database...) into the project folder
+ * as it is. Text files go through the normal file list instead. An existing file is never overwritten:
+ * the new one gets a free name ("tool (2).exe").
+ */
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+projectsRouter.put('/:id/upload', express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES }), (req, res) => {
+  try {
+    const meta = readMeta(req.params.id);
+    const dir = projectDir(req.params.id);
+    const name = safeFilePath(req.query.path);
+    if (name.split('/').some((s) => s.startsWith('.')) || isServiceFile(name) || skippedPath(name)) throw new HttpError(400, 'Invalid file name');
+    const body: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!body.length) throw new HttpError(400, 'Empty file');
+    const taken = (n: string) => fs.existsSync(path.join(dir, n)) || meta.files.some((f) => f.name.toLowerCase() === n.toLowerCase());
+    let final = name;
+    for (let i = 2; taken(final); i++) {
+      const slash = name.lastIndexOf('/') + 1;
+      const dot = name.lastIndexOf('.');
+      final = dot > slash ? `${name.slice(0, dot)} (${i})${name.slice(dot)}` : `${name} (${i})`;
+    }
+    const abs = path.join(dir, final);
+    if (!path.resolve(abs).startsWith(path.resolve(dir) + path.sep)) throw new HttpError(400, 'Invalid file name');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+    res.json({ name: final, size: body.length });
+  } catch (err: any) {
+    const status = err instanceof HttpError ? err.status : err?.type === 'entity.too.large' ? 413 : 500;
+    if (status === 500) console.error('Upload error:', err);
+    res.status(status).json({ error: err.message || 'Upload failed' });
+  }
+});
 
 /** A project file as it is on disk (for the image / database viewers). */
 projectsRouter.get('/:id/raw', (req, res) => {
