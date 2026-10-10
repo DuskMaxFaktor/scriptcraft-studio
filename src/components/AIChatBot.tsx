@@ -32,6 +32,8 @@ import {
   filesFromItems,
   formatRunReport,
   formatInstall,
+  formatExternal,
+  AGENT_STEP_CHOICES,
   type AgentFile,
   type AgentApproval,
   type AgentApprovalRequest,
@@ -167,6 +169,11 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
   } | null>(null);
   const [confirmAgent, setConfirmAgent] = useState(() => readPref('scriptcraft-agent-confirm', ['on', 'off'] as const, 'on') === 'on');
   useEffect(() => writePref('scriptcraft-agent-confirm', confirmAgent ? 'on' : 'off'), [confirmAgent]);
+  // Step limit of one task: 8 / 20 / 50, or 0 = until done (Stop always works)
+  const [agentSteps, setAgentSteps] = useState(() =>
+    Number(readPref('scriptcraft-agent-steps', AGENT_STEP_CHOICES.map(String), String(AGENT_STEP_CHOICES[0])))
+  );
+  useEffect(() => writePref('scriptcraft-agent-steps', String(agentSteps)), [agentSteps]);
   const [selectedRole, setSelectedRole] = useState<AIRole>(AI_ROLES[0]);
   const { models, selected: selectedModel, setSelectedModel } = useModels();
   const [contextMode, setContextMode] = useState<ContextMode>(() =>
@@ -351,13 +358,22 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
       signal: controller.signal,
       applyFiles: onApplyFiles,
       confirm: confirmAgent ? (req) => askApproval(req, controller.signal) : undefined,
+      // Files outside the project: asked every time, even with approvals off
+      confirmExternal: (req) => askApproval(req, controller.signal),
+      maxSteps: agentSteps,
       plan,
       onEvent: (e) => {
         if (e.kind === 'step') {
           if (e.planStep) markPlan(e.planStep);
-          const changed = e.changed.length ? `\n\n📝 **${t('agent.changed')}:** ${e.changed.map((f) => `\`${f}\``).join(', ')}` : '';
-          addModelMessage(e.text + changed, { modelUsed: e.model, roleUsed: 'agent' });
+          const code = (f: string) => `\`${f}\``;
+          const changed = e.changed.length ? `\n\n📝 **${t('agent.changed')}:** ${e.changed.map(code).join(', ')}` : '';
+          const renamed = e.renamed.length ? `\n\n✏️ **${t('agent.renamed')}:** ${e.renamed.map((r) => `${code(r.from)} → ${code(r.to)}`).join(', ')}` : '';
+          const deleted = e.deleted.length ? `\n\n🗑 **${t('agent.deleted')}:** ${e.deleted.map(code).join(', ')}` : '';
+          addModelMessage(e.text + changed + renamed + deleted, { modelUsed: e.model, roleUsed: 'agent' });
           setAgentStatus(t('agent.working'));
+        } else if (e.kind === 'external-read' || e.kind === 'external-write') {
+          addModelMessage(formatExternal(e), { roleUsed: 'agent' });
+          setAgentStatus(t('agent.thinking'));
         } else if (e.kind === 'run') {
           addModelMessage(formatRunReport(e.path, e.report), { roleUsed: 'agent' });
           setAgentStatus(t('agent.thinking'));
@@ -864,6 +880,22 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
               <label className="flex items-center gap-1 cursor-pointer text-slate-300" title={t('agent.confirmTitle')}>
                 <input type="checkbox" checked={confirmAgent} onChange={(e) => setConfirmAgent(e.target.checked)} disabled={isLoading} />
                 {t('agent.confirm')}
+              </label>
+              <label className="flex items-center gap-1 text-slate-300" title={t('agent.stepsTitle')}>
+                {t('agent.steps')}
+                <select
+                  value={agentSteps}
+                  onChange={(e) => setAgentSteps(Number(e.target.value))}
+                  disabled={isLoading}
+                  className="bg-panel border border-slate-700 rounded px-0.5 text-[11px] text-fg"
+                  data-agent-steps
+                >
+                  {AGENT_STEP_CHOICES.map((n) => (
+                    <option key={n} value={n}>
+                      {n === 0 ? t('agent.stepsUnlimited') : n}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
           </div>

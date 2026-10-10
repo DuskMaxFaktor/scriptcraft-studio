@@ -3,6 +3,8 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import zlib from 'zlib';
 
 const hasPython = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['--version'], { shell: true }).status === 0;
@@ -1505,6 +1507,140 @@ test('agent plan: propose, revise, run; the checklist is ticked off as the agent
   const checklist = page.locator('.chat-md').filter({ hasText: 'Небольшой калькулятор' });
   await expect(checklist.locator('input[type="checkbox"]:checked')).toHaveCount(3);
   await expect(page.locator('.chat-md').filter({ hasText: 'Результат' }).or(page.locator('.chat-md').filter({ hasText: 'calc.py' })).last()).toContainText('4');
+});
+
+test('agent: renames and deletes project files after approval; the deleted file stays in history', async ({ page, request }) => {
+  const project = (await (
+    await request.post('/api/projects', {
+      data: {
+        name: 'Уборка',
+        files: [
+          { name: 'main.py', language: 'python', content: 'print(1)', isEntry: true },
+          { name: 'helper.py', language: 'python', content: 'X = 1\n' },
+          { name: 'old.py', language: 'python', content: 'print("old")\n' },
+        ],
+      },
+    })
+  ).json()) as { id: string };
+  await page.addInitScript((id) => {
+    localStorage.setItem('scriptcraft-last-project', id);
+    localStorage.setItem('scriptcraft-agent-mode', 'on');
+    localStorage.setItem('scriptcraft-agent-confirm', 'on');
+    localStorage.setItem('scriptcraft-agent-plan', 'off');
+  }, project.id);
+  let steps = 0;
+  await page.route('**/api/agent/step', async (route) => {
+    steps++;
+    const step =
+      steps === 1
+        ? { message: 'Навожу порядок', files: [], run: null, done: false, planStep: null, rename: [{ from: 'helper.py', to: 'lib/helpers.py' }], delete: ['old.py', 'nope.py'] }
+        : { message: 'Готово', files: [], run: null, done: true, planStep: null };
+    await route.fulfill({ json: { step, model: 'test', notice: null } });
+  });
+
+  await page.goto('/');
+  await page.getByPlaceholder(/Опишите задачу/).fill('Убери лишнее');
+  await page.getByPlaceholder(/Опишите задачу/).press('Enter');
+
+  // One card: the rename and the delete of an existing file (a missing one is reported back to the agent instead)
+  const card = page.locator('[data-agent-approval="files"]');
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card.locator('[data-agent-rename]')).toContainText('lib/helpers.py');
+  await expect(card.locator('[data-agent-delete]')).toHaveCount(1);
+  await expect(card.locator('[data-agent-delete]')).toContainText('old.py');
+  await card.getByRole('button', { name: 'Применить', exact: true }).click();
+
+  await expect(page.getByText(/Готово/).last()).toBeVisible({ timeout: 20_000 });
+  await expect(sidebarFile(page, 'old.py')).toHaveCount(0);
+  // Saved to disk: new name, old ones gone
+  await expect
+    .poll(async () => ((await (await request.get(`/api/projects/${project.id}`)).json()).files as { name: string }[]).map((f) => f.name).sort(), { timeout: 15_000 })
+    .toEqual(['lib/helpers.py', 'main.py']);
+  expect(await projectFile(request, project.id, 'lib/helpers.py')).toBe('X = 1\n');
+  // Deleted and renamed-away files can be restored from the file history
+  const history = (await (await request.get(`/api/projects/${project.id}/history`)).json()).files as { name: string; deleted: boolean }[];
+  expect(history.filter((h) => h.deleted).map((h) => h.name).sort()).toEqual(['helper.py', 'old.py']);
+});
+
+test('agent: the step limit can be lifted — "no limit" runs past 8 steps until done', async ({ page, request }) => {
+  const project = (await (await request.post('/api/projects', { data: { name: 'Долго', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => {
+    localStorage.setItem('scriptcraft-last-project', id);
+    localStorage.setItem('scriptcraft-agent-mode', 'on');
+    localStorage.setItem('scriptcraft-agent-confirm', 'off');
+    localStorage.setItem('scriptcraft-agent-plan', 'off');
+  }, project.id);
+  let steps = 0;
+  await page.route('**/api/agent/step', async (route) => {
+    steps++;
+    await route.fulfill({ json: { step: { message: `Шаг ${steps}`, files: [], run: null, done: steps === 12, planStep: null }, model: 'test', notice: null } });
+  });
+  await page.goto('/');
+  await page.locator('[data-agent-steps]').selectOption('0');
+  await page.getByPlaceholder(/Опишите задачу/).fill('Долгая задача');
+  await page.getByPlaceholder(/Опишите задачу/).press('Enter');
+  await expect(page.getByText(/Готово.*за шагов: 12/).last()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/дошёл до лимита/)).toHaveCount(0);
+  expect(steps).toBe(12);
+  // The choice is remembered
+  expect(await page.evaluate(() => localStorage.getItem('scriptcraft-agent-steps'))).toBe('0');
+});
+
+test('agent: files outside the project are read and changed only after asking — even with approvals off', async ({ page, request }) => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'scriptcraft-outside-'));
+  const notes = path.join(outside, 'заметки.txt');
+  fs.writeFileSync(notes, 'купить молоко\n');
+  try {
+    const project = (await (await request.post('/api/projects', { data: { name: 'Снаружи', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
+    await page.addInitScript((id) => {
+      localStorage.setItem('scriptcraft-last-project', id);
+      localStorage.setItem('scriptcraft-agent-mode', 'on');
+      localStorage.setItem('scriptcraft-agent-confirm', 'off'); // "do not ask" — outside the project it still asks
+      localStorage.setItem('scriptcraft-agent-plan', 'off');
+    }, project.id);
+    const bodies: string[] = [];
+    let steps = 0;
+    await page.route('**/api/agent/step', async (route) => {
+      steps++;
+      bodies.push(route.request().postData() || '');
+      const step =
+        steps === 1
+          ? { message: 'Смотрю заметки', files: [], run: null, done: false, planStep: null, readExternal: [notes] }
+          : steps === 2
+            ? { message: 'Дописываю', files: [], run: null, done: false, planStep: null, writeExternal: [{ path: notes, content: 'купить молоко\nкупить хлеб\n' }] }
+            : { message: 'Готово', files: [], run: null, done: true, planStep: null };
+      await route.fulfill({ json: { step, model: 'test', notice: null } });
+    });
+
+    await page.goto('/');
+    await page.getByPlaceholder(/Опишите задачу/).fill('Допиши хлеб в мои заметки');
+    await page.getByPlaceholder(/Опишите задачу/).press('Enter');
+
+    // Reading: asked, and there is no "allow all"
+    const read = page.locator('[data-agent-approval="external-read"]');
+    await expect(read).toBeVisible({ timeout: 20_000 });
+    await expect(read).toContainText('заметки.txt');
+    await expect(read.getByRole('button', { name: /Разрешить всё/ })).toHaveCount(0);
+    await read.getByRole('button', { name: 'Разрешить чтение' }).click();
+
+    // Writing: asked again, with the difference; the agent got the file's text
+    const write = page.locator('[data-agent-approval="external-write"]');
+    await expect(write).toBeVisible({ timeout: 20_000 });
+    expect(bodies[1]).toContain('купить молоко');
+    expect(fs.readFileSync(notes, 'utf-8')).toBe('купить молоко\n'); // nothing written before "Apply"
+    await expect(write).toContainText('+1');
+    await write.getByRole('button', { name: 'Применить', exact: true }).click();
+
+    await expect(page.getByText(/Готово/).last()).toBeVisible({ timeout: 20_000 });
+    expect(fs.readFileSync(notes, 'utf-8')).toBe('купить молоко\nкупить хлеб\n');
+    // The old version is in the backups folder, shown in the chat
+    const backupLine = page.locator('.chat-md').filter({ hasText: 'Изменено вне проекта' }).last();
+    await expect(backupLine).toContainText('старая версия');
+    const backup = (await backupLine.locator('code').last().textContent())!.trim();
+    expect(fs.readFileSync(backup, 'utf-8')).toBe('купить молоко\n');
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('publish to GitHub from the Git panel (fake GitHub CLI)', async ({ page, request }) => {

@@ -12,7 +12,7 @@ ScriptCraft Studio работает на вашем компьютере. У с�
 
 | Когда | Куда | Что |
 |---|---|---|
-| Вопрос ИИ-помощнику или работа агента | выбранная нейросеть: Google Gemini, ваш сервер (OpenAI-совместимый), или локальная Ollama | ваш вопрос, история диалога и — если выбран контекст «Файл»/«Проект» — содержимое файлов проекта, вложенные картинки |
+| Вопрос ИИ-помощнику или работа агента | выбранная нейросеть: Google Gemini, ваш сервер (OpenAI-совместимый), или локальная Ollama | ваш вопрос, история диалога и — если выбран контекст «Файл»/«Проект» — содержимое файлов проекта, вложенные картинки; файлы вне проекта, которые агент читает с вашего разрешения (студия спрашивает каждый раз) |
 | Проверка обновлений (если указан репозиторий) | GitHub (`api.github.com`) | обычный запрос списка релизов, без данных о вас |
 | Установка обновления | GitHub | скачивание установщика |
 | Установка пакетов | PyPI (`pip`), npm, winget | имена пакетов |
@@ -35,4 +35,4 @@ ScriptCraft Studio работает на вашем компьютере. У с�
 
 ScriptCraft Studio runs on your computer. It has no server of its own, no accounts and no telemetry.
 
-Network traffic happens only when you use a feature: the chosen AI model (your question, the chat history and, with the "File"/"Project" context, the project files — never `.env`, run settings or API keys), GitHub for update checks/downloads and publishing, PyPI/npm/winget for package installs. Data sent to Google Gemini is processed under Google's Gemini API terms; with a free key Google may use requests to improve its models — use a paid key or a local Ollama model for confidential code. Problem reports are built locally with keys, tokens and your user name removed, and are only shared by you.
+Network traffic happens only when you use a feature: the chosen AI model (your question, the chat history and, with the "File"/"Project" context, the project files, and files outside the project the agent reads after you approve each time — never `.env`, run settings or API keys), GitHub for update checks/downloads and publishing, PyPI/npm/winget for package installs. Data sent to Google Gemini is processed under Google's Gemini API terms; with a free key Google may use requests to improve its models — use a paid key or a local Ollama model for confidential code. Problem reports are built locally with keys, tokens and your user name removed, and are only shared by you.

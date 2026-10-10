@@ -49,10 +49,11 @@ The branch icon on the left (`Ctrl+Shift+G`): changes, commits, branches, mergin
 The panel on the right. The Gemini key — the chip icon in the header → "AI models"; a local **Ollama** model or your own server can be added there too.
 
 - **Chat** answers questions; "Create files" moves code from an answer into the project.
-- **Agent** (the switch in the chat) edits files and runs code itself, but **asks before every action**; it shows a plan for bigger tasks.
+- **Agent** (the switch in the chat) creates, edits, renames and deletes files and runs code itself, but **asks before every action**; it shows a plan for bigger tasks. A file the agent deleted can be restored: explorer → "Version history and deleted files". "Steps" is how many steps the agent may take for one task; "no limit" works until it is done or you press Stop.
+- **Files outside the project** are read and changed by their full path, e.g. `C:\Users\Name\Desktop\notes.txt` — only with your approval, and the studio asks **every time**, even after "Allow all". Before an overwrite the old version is copied to the backups folder (`agent\…`). The studio's folder, `.env` files, Windows and Program Files are never available to the agent.
 - "Fix with AI" appears after a failed run.
 
-> **What goes to the AI.** Your question and, with the "File" or "Project" context on, the contents of the project files are sent to the chosen model. The `.env` file, run settings and keys are never sent. With Ollama everything stays on your computer.
+> **What goes to the AI.** Your question and, with the "File" or "Project" context on, the contents of the project files are sent to the chosen model, plus files outside the project the agent read with your approval. `.env` files, run settings and keys are never sent. With Ollama everything stays on your computer.
 
 ## Disassembler
 

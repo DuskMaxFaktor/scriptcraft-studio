@@ -64,6 +64,29 @@ test('no real packages -> install is null', async () => {
   assert.equal(b.step.install, null);
 });
 
+test('deletes, renames and files outside the project are cleaned', async () => {
+  nextStep = JSON.stringify({
+    message: 'Навожу порядок',
+    files: [],
+    run: null,
+    done: false,
+    delete: ['\\old\\tmp.py', 'old/tmp.py', '', 7],
+    rename: [{ from: 'a.py', to: 'src\\a.py' }, { from: 'same.py', to: 'same.py' }, { from: 'x.py' }],
+    readExternal: [' C:\\Users\\me\\notes.txt ', 'C:\\Users\\me\\notes.txt', ''],
+    writeExternal: [{ path: 'C:\\Users\\me\\out.txt', content: 'hi' }, { path: '', content: 'x' }, { path: 'C:\\y.txt' }],
+  });
+  const { step } = await gemini.handleAgentStep({ model: 'gemini-3.5-flash', messages: ask, lang: 'ru' });
+  assert.deepEqual(step.delete, ['old/tmp.py']);
+  assert.deepEqual(step.rename, [{ from: 'a.py', to: 'src/a.py' }]);
+  assert.deepEqual(step.readExternal, ['C:\\Users\\me\\notes.txt']);
+  assert.deepEqual(step.writeExternal, [{ path: 'C:\\Users\\me\\out.txt', content: 'hi' }]);
+
+  // An older answer without the new fields: empty lists, nothing to do
+  nextStep = JSON.stringify({ message: 'ok', files: [], run: null, done: true });
+  const b = await gemini.handleAgentStep({ model: 'gemini-3.5-flash', messages: ask, lang: 'ru' });
+  assert.deepEqual([b.step.delete, b.step.rename, b.step.readExternal, b.step.writeExternal], [[], [], [], []]);
+});
+
 test('node packages are parsed too', async () => {
   nextStep = JSON.stringify({ message: 'нужен chalk', files: [], run: null, install: { node: ['chalk'] }, done: false });
   const { step } = await gemini.handleAgentStep({ model: 'gemini-3.5-flash', messages: ask, lang: 'ru' });

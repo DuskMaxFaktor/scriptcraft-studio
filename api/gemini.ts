@@ -344,6 +344,14 @@ export interface AgentStep {
   planStep: number | null;
   /** Packages the agent wants installed into the project before continuing (the user approves first) */
   install: { python: string[]; node: string[] } | null;
+  /** Project files to delete (they stay restorable from the file history) */
+  delete: string[];
+  /** Project files to rename or move */
+  rename: { from: string; to: string }[];
+  /** Full paths outside the project to read (a file's text, or a folder's list); the user approves first */
+  readExternal: string[];
+  /** Files outside the project to create or overwrite with full content; the user approves every write */
+  writeExternal: { path: string; content: string }[];
 }
 
 const AGENT_SYSTEM = `You are an autonomous coding agent working inside ScriptCraft Studio, a local code studio on the user's Windows PC.
@@ -352,6 +360,10 @@ You work in steps. In every step you answer ONLY with JSON matching the schema:
 - "files": files to create or overwrite in the project, each with the path and the COMPLETE new content (never a fragment, never "..." placeholders). Use [] if nothing changes.
 - "run": path of ONE project file to execute now to verify your work, or null.
 - "install": packages to add to the project when the task truly needs a third-party library, as {"python": ["name"], "node": ["name"]} (either list may be empty), or null. The user approves before anything is installed; after that the packages are importable. Keep the list minimal and prefer the standard library.
+- "delete": project files to delete, or []. Deleted files can be restored by the user from the file history.
+- "rename": project files to rename or move, as [{"from": "old/path.py", "to": "new/path.py"}], or []. Update imports in other files yourself via "files".
+- "readExternal": FULL paths of files or folders OUTSIDE the project to look at (e.g. "C:\\Users\\Name\\Desktop\\notes.txt"), or []. A file gives its text, a folder gives the list of its entries. The user approves first; the result comes in the next message.
+- "writeExternal": files OUTSIDE the project to create or overwrite, each with the FULL path and the COMPLETE new content, or []. The user approves every such write and sees the difference; read an existing file first so you do not lose its content. Only do this when the task really asks to change files outside the project.
 - "done": true only when the task is finished and verified.
 
 How running works:
@@ -360,6 +372,7 @@ How running works:
 - Programs run NON-interactively: there is no stdin (input() would fail) and there is a 20 second time limit. Make programs demonstrate themselves with sample data.
 - Only the standard library / built-in Node modules and the packages listed as installed in the task are available by default. If another pip/npm package is really needed, request it via the "install" field (the user approves first); do not assume a package is present until it has been installed.
 - After a run you receive the exit code, stdout and stderr. If it failed, fix the code and run again.
+Files outside the project: the studio's own folder, .env files, Windows and Program Files are never available.
 Keep the number of steps small. Do not rewrite files that do not need changes.
 If the task comes with an approved plan, follow it in order and set "planStep" to the number of the plan step this answer works on (otherwise null).`;
 
@@ -386,9 +399,32 @@ const AGENT_SCHEMA = {
     },
     done: { type: 'BOOLEAN' },
     planStep: { type: 'INTEGER', nullable: true },
+    delete: { type: 'ARRAY', items: { type: 'STRING' } },
+    rename: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { from: { type: 'STRING' }, to: { type: 'STRING' } },
+        required: ['from', 'to'],
+      },
+    },
+    readExternal: { type: 'ARRAY', items: { type: 'STRING' } },
+    writeExternal: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { path: { type: 'STRING' }, content: { type: 'STRING' } },
+        required: ['path', 'content'],
+      },
+    },
   },
   required: ['message', 'files', 'done'],
 };
+
+/** A project path as the studio stores it: forward slashes, no leading slash. */
+const projectPath = (p: string) => p.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+const strings = (arr: any, max: number): string[] =>
+  Array.isArray(arr) ? [...new Set(arr.filter((x: any) => typeof x === 'string' && x.trim()).map((x: string) => x.trim()))].slice(0, max) as string[] : [];
 
 /** Clean a model-proposed install request: trim, dedupe, cap; null when there is nothing to install. */
 function parseInstall(raw: any): { python: string[]; node: string[] } | null {
@@ -420,7 +456,7 @@ export async function handleAgentStep(params: {
   if (isExternalModel(preferred)) {
     const l = withReplyLanguage(
       agentSystem +
-        '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "install": {"python": string[], "node": string[]} or null, "done": boolean, "planStep": number or null}.',
+        '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "install": {"python": string[], "node": string[]} or null, "delete": string[], "rename": [{"from": string, "to": string}], "readExternal": string[], "writeExternal": [{"path": string, "content": string}], "done": boolean, "planStep": number or null}.',
       toLlmMessages(messages),
       lang,
       true
@@ -456,6 +492,17 @@ export async function handleAgentStep(params: {
     done: !!raw.done,
     planStep: Number.isInteger(raw.planStep) && raw.planStep > 0 ? raw.planStep : null,
     install: parseInstall(raw.install),
+    delete: [...new Set(strings(raw.delete, 50).map(projectPath).filter(Boolean))],
+    rename: (Array.isArray(raw.rename) ? raw.rename : [])
+      .filter((x: any) => x && typeof x.from === 'string' && typeof x.to === 'string')
+      .map((x: any) => ({ from: projectPath(x.from), to: projectPath(x.to) }))
+      .filter((x: { from: string; to: string }) => x.from && x.to && x.from !== x.to)
+      .slice(0, 50),
+    readExternal: strings(raw.readExternal, 20),
+    writeExternal: (Array.isArray(raw.writeExternal) ? raw.writeExternal : [])
+      .filter((f: any) => f && typeof f.path === 'string' && f.path.trim() && typeof f.content === 'string')
+      .map((f: any) => ({ path: f.path.trim(), content: f.content }))
+      .slice(0, 20),
   };
   return { step, notice: r.notice, model: r.model };
 }
@@ -475,7 +522,8 @@ Do NOT write code now. Answer ONLY with JSON:
 - "summary": one or two sentences: what will be built or changed and how it will be checked.
 - "steps": 2 to 7 ordered steps; each has "title" (one short sentence a beginner understands) and "files" (project files it creates or changes, [] if none). The last step checks the result by running a file when that is possible.
 - "questions": important things that are unclear and change the plan a lot (at most 3); [] when everything is clear.
-Programs run non-interactively with a 20 second limit; only the standard library and the packages listed as installed are available.`;
+Programs run non-interactively with a 20 second limit; only the standard library and the packages listed as installed are available.
+The agent can also delete and rename project files, and — with the user's approval each time — read and change files outside the project by their full path.`;
 
 const PLAN_SCHEMA = {
   type: 'OBJECT',

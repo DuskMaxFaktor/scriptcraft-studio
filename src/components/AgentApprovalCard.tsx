@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
-import { Check, X, CheckCheck, GitCompare, Play, FilePlus, FileEdit, Package } from 'lucide-react';
+import { Check, X, CheckCheck, GitCompare, Play, FilePlus, FileEdit, Package, Trash2, ArrowRight, FolderOpen, ShieldAlert } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
 import { detectLanguageFromName } from '../utils/presets.ts';
@@ -15,32 +15,57 @@ interface Props {
   onAnswer: (answer: AgentApproval) => void;
 }
 
+type Change = { path: string; oldContent: string | null; newContent: string };
+
 /** Card in the chat: the agent asks before changing files or running code. */
 export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
   const { t } = useI18n();
   const { theme } = useTheme();
   const [diffPath, setDiffPath] = useState<string | null>(null);
 
-  const stats = useMemo(
-    () =>
-      request.kind === 'files'
-        ? request.changes.map((c) => ({ ...c, ...lineDiffStats(c.oldContent, c.newContent) }))
-        : [],
-    [request]
-  );
-  const diffChange = request.kind === 'files' ? request.changes.find((c) => c.path === diffPath) : undefined;
+  const changes: Change[] = request.kind === 'files' || request.kind === 'external-write' ? request.changes : [];
+  const stats = useMemo(() => changes.map((c) => ({ ...c, ...lineDiffStats(c.oldContent, c.newContent) })), [request]);
+  const diffChange = changes.find((c) => c.path === diffPath);
+  const deletes = request.kind === 'files' ? request.deletes || [] : [];
+  const renames = request.kind === 'files' ? request.renames || [] : [];
+  const external = request.kind === 'external-read' || request.kind === 'external-write';
+  // Outside the project and risky runs: one answer per action, never "allow all"
+  const noAllowAll = external || (request.kind === 'run' && !!request.risks?.length);
+
+  const title =
+    request.kind === 'files'
+      ? t('approve.filesTitle', { count: changes.length + deletes.length + renames.length })
+      : request.kind === 'run'
+        ? t('approve.runTitle')
+        : request.kind === 'install'
+          ? t('approve.installTitle')
+          : request.kind === 'external-read'
+            ? t('approve.readExternalTitle', { count: request.paths.length })
+            : t('approve.writeExternalTitle', { count: request.changes.length });
+  const okLabel =
+    request.kind === 'files' || request.kind === 'external-write'
+      ? t('approve.apply')
+      : request.kind === 'run'
+        ? t('approve.run')
+        : request.kind === 'install'
+          ? t('approve.install')
+          : t('approve.allowRead');
 
   return (
-    <div className="rounded-xl border border-amber-500/50 bg-amber-950/20 p-3 text-xs space-y-2 select-text" data-agent-approval={request.kind}>
-      <div className="font-semibold text-amber-300">
-        {request.kind === 'files'
-          ? t('approve.filesTitle', { count: request.changes.length })
-          : request.kind === 'run'
-            ? t('approve.runTitle')
-            : t('approve.installTitle')}
-      </div>
+    <div
+      className={`rounded-xl border p-3 text-xs space-y-2 select-text ${external ? 'border-rose-500/60 bg-rose-950/20' : 'border-amber-500/50 bg-amber-950/20'}`}
+      data-agent-approval={request.kind}
+    >
+      <div className={`font-semibold ${external ? 'text-rose-300' : 'text-amber-300'}`}>{title}</div>
 
-      {request.kind === 'files' ? (
+      {external && (
+        <div className="flex items-start gap-1.5 text-rose-200/90" data-agent-external-note>
+          <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-px" />
+          <span>{request.kind === 'external-read' ? t('approve.readExternalNote') : t('approve.writeExternalNote')}</span>
+        </div>
+      )}
+
+      {stats.length > 0 && (
         <div className="space-y-1">
           {stats.map((c) => (
             <div key={c.path} className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-panel border border-slate-800">
@@ -67,7 +92,48 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
             </div>
           ))}
         </div>
-      ) : request.kind === 'run' ? (
+      )}
+
+      {(renames.length > 0 || deletes.length > 0) && (
+        <div className="space-y-1">
+          {renames.map((r) => (
+            <div key={`r-${r.from}`} className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800 min-w-0" data-agent-rename>
+              <ArrowRight className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="font-mono truncate text-slate-400" title={r.from}>
+                {r.from}
+              </span>
+              <span className="text-slate-500 shrink-0">→</span>
+              <span className="font-mono truncate text-fg" title={r.to}>
+                {r.to}
+              </span>
+            </div>
+          ))}
+          {deletes.map((d) => (
+            <div key={`d-${d}`} className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800 min-w-0" data-agent-delete>
+              <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span className="font-mono truncate text-fg line-through decoration-rose-400/70" title={d}>
+                {d}
+              </span>
+              <span className="text-slate-500 shrink-0">{t('approve.deleteNote')}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {request.kind === 'external-read' && (
+        <div className="space-y-1">
+          {request.paths.map((p) => (
+            <div key={p} className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800 min-w-0">
+              <FolderOpen className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="font-mono truncate text-fg" title={p}>
+                {p}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {request.kind === 'run' && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-panel border border-slate-800">
             <Play className="w-3.5 h-3.5 text-emerald-400" />
@@ -81,7 +147,9 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
             </div>
           )}
         </div>
-      ) : (
+      )}
+
+      {request.kind === 'install' && (
         <div className="space-y-1">
           <div className="flex items-center gap-1.5 text-slate-400">
             <Package className="w-3.5 h-3.5 text-amber-400" />
@@ -107,17 +175,17 @@ export const AgentApprovalCard: React.FC<Props> = ({ request, onAnswer }) => {
           className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
         >
           <Check className="w-3.5 h-3.5" />
-          {request.kind === 'files' ? t('approve.apply') : request.kind === 'run' ? t('approve.run') : t('approve.install')}
+          {okLabel}
         </button>
-        {!(request.kind === 'run' && request.risks?.length) && (
-        <button
-          onClick={() => onAnswer('all')}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-200"
-          title={t('approve.allTitle')}
-        >
-          <CheckCheck className="w-3.5 h-3.5" />
-          {t('approve.all')}
-        </button>
+        {!noAllowAll && (
+          <button
+            onClick={() => onAnswer('all')}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-panel hover:bg-hover border border-slate-700 text-slate-200"
+            title={t('approve.allTitle')}
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            {t('approve.all')}
+          </button>
         )}
         <button
           onClick={() => onAnswer('no')}
