@@ -208,8 +208,9 @@ export function parseLcov(lcov: string, dir: string): CoverageReport {
       rel = rel.slice(norm.length + 1);
     }
     if (rel.startsWith('..') || /(^|\/)(node_modules|\.packages)\//.test(rel) || isTestFile(rel)) continue;
-    // Node maps TypeScript (compiled by tsx) back to whole functions, not lines: an unrun `return` inside a
-    // function that ran shows as run. Better not measured than painted green wrongly.
+    // Re-checked on Node 22 + tsx: line hits look plausible for branches that never run, but an
+    // unreachable `return` after an earlier taken `return` in the same function is still painted green.
+    // Keep TypeScript out of the gutter until the map is honest line by line.
     if (/\.[mc]?tsx?$/.test(rel)) {
       notMeasured.push(rel);
       continue;

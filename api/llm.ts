@@ -148,12 +148,21 @@ export interface JsonOptions {
   schema?: Record<string, unknown>;
   /** Longest answer in tokens */
   maxTokens?: number;
+  /** Sampling temperature (agent JSON defaults to 0.3 when omitted) */
+  temperature?: number;
 }
 
 /** A non-streamed answer never takes longer than this: a stuck generation is cancelled (Ollama stops on disconnect). */
 const OLLAMA_REQUEST_MS = 6 * 60 * 1000;
 
-async function ollamaChat(modelId: string, system: string, messages: LlmMessage[], temperature: number, json = false, jsonOpts: JsonOptions = {}): Promise<string> {
+async function ollamaChatResult(
+  modelId: string,
+  system: string,
+  messages: LlmMessage[],
+  temperature: number,
+  json = false,
+  jsonOpts: JsonOptions = {}
+): Promise<{ text: string; doneReason?: string }> {
   const res = await ollamaPost(
     modelId,
     {
@@ -168,7 +177,45 @@ async function ollamaChat(modelId: string, system: string, messages: LlmMessage[
   const data = await res.json();
   const text = data.message?.content;
   if (!text) throw new Error('Ollama: empty response');
-  return text;
+  return { text, doneReason: typeof data.done_reason === 'string' ? data.done_reason : undefined };
+}
+
+async function ollamaChat(modelId: string, system: string, messages: LlmMessage[], temperature: number, json = false, jsonOpts: JsonOptions = {}): Promise<string> {
+  return (await ollamaChatResult(modelId, system, messages, temperature, json, jsonOpts)).text;
+}
+
+/** True when the model hit the length cap or left an unfinished JSON object. */
+export function looksLikeTruncatedJson(text: string, doneReason?: string): boolean {
+  if (doneReason === 'length') return true;
+  const t = (text || '').trim();
+  if (!t || !t.includes('{')) return false;
+  try {
+    JSON.parse(t);
+    return false;
+  } catch {
+    // continue
+  }
+  const opens = (t.match(/\{/g) || []).length;
+  const closes = (t.match(/\}/g) || []).length;
+  if (opens > closes) return true;
+  if (/[,:]\s*$/.test(t) || /\\["']?$/.test(t)) return true;
+  // Unclosed string: odd count of unescaped quotes after the last {
+  const from = t.lastIndexOf('{');
+  const slice = t.slice(from);
+  let inStr = false;
+  let esc = false;
+  for (const ch of slice) {
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (ch === '\\' && inStr) {
+      esc = true;
+      continue;
+    }
+    if (ch === '"') inStr = !inStr;
+  }
+  return inStr;
 }
 
 async function ollamaStream(
@@ -317,25 +364,41 @@ export function extractJson(text: string): any {
   }
 }
 
-/** JSON answer (agent steps). Retries once with a reminder if the model replies with something else. */
+const JSON_RETRY_INVALID =
+  'Your previous answer was not valid JSON. Reply again with ONLY the JSON object, nothing else.';
+const JSON_RETRY_TRUNCATED =
+  'Your previous JSON was cut off (too long). Reply again with ONLY the JSON object. Put at most ONE file in "files", keep that file short, set run=null, and done=false if more work remains.';
+
+/** JSON answer (agent steps). Retries once — with a shorter-file nudge when the reply was truncated. */
 export async function externalJson(modelId: string, system: string, messages: LlmMessage[], jsonOpts: JsonOptions = {}): Promise<any> {
+  const temperature = jsonOpts.temperature ?? 0.3;
   if (modelId.startsWith('ollama:')) {
-    const first = await ollamaChat(modelId, system, messages, 0.3, true, jsonOpts);
+    const first = await ollamaChatResult(modelId, system, messages, temperature, true, jsonOpts);
     try {
-      return extractJson(first);
+      return extractJson(first.text);
     } catch {
+      const reminder = looksLikeTruncatedJson(first.text, first.doneReason) ? JSON_RETRY_TRUNCATED : JSON_RETRY_INVALID;
+      const retryOpts =
+        looksLikeTruncatedJson(first.text, first.doneReason) && jsonOpts.schema
+          ? (() => {
+              const schema = structuredClone(jsonOpts.schema) as Record<string, unknown>;
+              const props = schema.properties as Record<string, Record<string, unknown>> | undefined;
+              if (props?.files) props.files.maxItems = 1;
+              return { ...jsonOpts, schema, maxTokens: Math.min(jsonOpts.maxTokens ?? 8192, 6000) };
+            })()
+          : jsonOpts;
       return extractJson(
         await ollamaChat(
           modelId,
           system,
           [
             ...messages,
-            { role: 'model', text: first.slice(0, 2000) },
-            { role: 'user', text: 'Your previous answer was not valid JSON. Reply again with ONLY the JSON object, nothing else.' },
+            { role: 'model', text: first.text.slice(0, 2000) },
+            { role: 'user', text: reminder },
           ],
-          0.3,
+          temperature,
           true,
-          jsonOpts
+          retryOpts
         )
       );
     }
@@ -344,7 +407,7 @@ export async function externalJson(modelId: string, system: string, messages: Ll
   const ask = async (msgs: LlmMessage[]) => {
     const res = await post(ep, {
       messages: toOpenAiMessages(system, msgs),
-      temperature: 0.3,
+      temperature,
       stream: false,
       response_format: { type: 'json_object' },
     });
@@ -355,10 +418,11 @@ export async function externalJson(modelId: string, system: string, messages: Ll
   try {
     return extractJson(first);
   } catch {
+    const reminder = looksLikeTruncatedJson(first) ? JSON_RETRY_TRUNCATED : JSON_RETRY_INVALID;
     const second = await ask([
       ...messages,
       { role: 'model', text: first.slice(0, 2000) },
-      { role: 'user', text: 'Your previous answer was not valid JSON. Reply again with ONLY the JSON object, nothing else.' },
+      { role: 'user', text: reminder },
     ]);
     return extractJson(second);
   }
@@ -448,5 +512,6 @@ export function toJsonSchema(schema: any): Record<string, unknown> {
   if (schema.properties) out.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, v]) => [k, toJsonSchema(v)]));
   if (schema.items) out.items = toJsonSchema(schema.items);
   if (schema.required) out.required = schema.required;
+  if (typeof schema.maxItems === 'number') out.maxItems = schema.maxItems;
   return out;
 }

@@ -151,11 +151,26 @@ function startPython(s: DebugSession, root: string, entryAbs: string, bps: Break
   });
 }
 
-// ---------------- JavaScript (Node inspector / CDP) ----------------
+// ---------------- JavaScript / TypeScript (Node inspector / CDP) ----------------
 
-function startNode(s: DebugSession, root: string, entryAbs: string, bps: Breakpoints, env: NodeJS.ProcessEnv, cwd: string) {
-  const proc = spawnCommand('node', ['--inspect-brk=127.0.0.1:0', entryAbs], cwd, env);
+/**
+ * `nodeArgs` is what node receives after `--inspect-brk`: `[entry.js]` or
+ * `['--experimental-strip-types', entry.ts]` (strip-types exposes .ts to the inspector; tsx CLI does not).
+ * When `pathStyleScripts` is set, Node may report scripts as bare filesystem paths instead of file:// URLs.
+ */
+function startNode(
+  s: DebugSession,
+  root: string,
+  nodeArgs: string[],
+  bps: Breakpoints,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  pathStyleScripts = false
+) {
+  const proc = spawnCommand('node', ['--inspect-brk=127.0.0.1:0', ...nodeArgs], cwd, env);
   const rootUrl = pathToFileURL(root).href.toLowerCase() + '/';
+  const rootAbs = path.resolve(root);
+  const rootAbsLower = rootAbs.toLowerCase();
   let ws: WebSocket | null = null;
   let nextId = 1;
   const callbacks = new Map<number, (result: any) => void>();
@@ -174,13 +189,37 @@ function startNode(s: DebugSession, root: string, entryAbs: string, bps: Breakpo
       ws.send(JSON.stringify({ id, method, params }));
     });
 
-  const relOf = (url: string): string | null => {
-    if (!url || !url.toLowerCase().startsWith(rootUrl)) return null;
-    try {
-      return path.relative(root, fileURLToPath(url)).replace(/\\/g, '/');
-    } catch {
-      return null;
+  const underRoot = (absPath: string): string | null => {
+    const absLower = absPath.toLowerCase();
+    const rootPosix = rootAbsLower.replace(/\\/g, '/');
+    const absPosix = absLower.replace(/\\/g, '/');
+    if (absLower === rootAbsLower || absLower.startsWith(rootAbsLower + path.sep)) {
+      return path.relative(rootAbs, absPath).replace(/\\/g, '/');
     }
+    if (absPosix === rootPosix || absPosix.startsWith(rootPosix + '/')) {
+      return path.relative(rootAbs, absPath).replace(/\\/g, '/');
+    }
+    return null;
+  };
+  /** Map a CDP script URL (file:// or bare path) to a project-relative path. */
+  const relOf = (url: string): string | null => {
+    if (!url) return null;
+    try {
+      if (/^file:/i.test(url)) return underRoot(fileURLToPath(url));
+      if (path.isAbsolute(url) || /^[a-zA-Z]:[\\/]/.test(url)) return underRoot(path.resolve(url));
+    } catch {
+      /* not a filesystem url */
+    }
+    // Last resort: prefix match on the file:// form (same as older Node builds)
+    const lower = url.toLowerCase();
+    if (lower.startsWith(rootUrl)) {
+      try {
+        return underRoot(fileURLToPath(url));
+      } catch {
+        return null;
+      }
+    }
+    return null;
   };
   // Case-insensitive pattern without regex flags (V8 urlRegex does not support "(?i)"): "c:" -> "[cC]:"
   const ciPattern = (t: string) =>
@@ -191,15 +230,27 @@ function startNode(s: DebugSession, root: string, entryAbs: string, bps: Breakpo
     for (const id of breakpointIds) await send('Debugger.removeBreakpoint', { breakpointId: id });
     breakpointIds = [];
     for (const [rel, bps] of Object.entries(b)) {
+      const abs = path.join(root, rel);
       // match the file by its absolute file:// URL (case-insensitive on Windows)
-      const url = pathToFileURL(path.join(root, rel)).href;
+      const url = pathToFileURL(abs).href;
       for (const bp of bps) {
-        const r = await send('Debugger.setBreakpointByUrl', {
-          lineNumber: bp.line - 1,
-          urlRegex: `^${ciPattern(url)}$`,
-          ...(bp.log ? { condition: nodeLogCondition(bp.log) } : bp.condition ? { condition: bp.condition } : {}),
-        });
-        if (r?.breakpointId) breakpointIds.push(r.breakpointId);
+        const extra = bp.log ? { condition: nodeLogCondition(bp.log) } : bp.condition ? { condition: bp.condition } : {};
+        // Node may report the same file as file:// (urlRegex) or as a bare path (url: abs),
+        // especially with --experimental-strip-types and on some CI hosts — set both.
+        const targets: Record<string, unknown>[] = [{ urlRegex: `^${ciPattern(url)}$` }, { url: abs }];
+        if (pathStyleScripts) {
+          // Forward-slash form of the Windows path, seen on some Node builds
+          const absPosix = abs.replace(/\\/g, '/');
+          if (absPosix !== abs) targets.push({ url: absPosix });
+        }
+        for (const target of targets) {
+          const r = await send('Debugger.setBreakpointByUrl', {
+            lineNumber: bp.line - 1,
+            ...target,
+            ...extra,
+          });
+          if (r?.breakpointId) breakpointIds.push(r.breakpointId);
+        }
       }
     }
   };
@@ -228,7 +279,7 @@ function startNode(s: DebugSession, root: string, entryAbs: string, bps: Breakpo
       await send('Debugger.stepOut');
       return;
     }
-    const top = frames.find((f) => relOf(frameUrl(f)));
+    const top = frames.find((f) => relOf(frameUrl(f))) || frames[0];
     const locals: DebugVariable[] = [];
     const globals: DebugVariable[] = [];
     for (const scope of top.scopeChain as any[]) {
@@ -312,8 +363,8 @@ export const debugRouter = Router();
 debugRouter.post('/start', async (req, res) => {
   const { language, code, files, entry, projectId, breakpoints } = req.body || {};
   const lang = String(language || '').toLowerCase();
-  if (!['python', 'javascript'].includes(lang)) {
-    return res.status(400).json({ error: 'The debugger supports Python and JavaScript files' });
+  if (!['python', 'javascript', 'typescript'].includes(lang)) {
+    return res.status(400).json({ error: 'The debugger supports Python, JavaScript and TypeScript files' });
   }
   if (typeof code !== 'string' || !Array.isArray(files) || typeof entry !== 'string') {
     return res.status(400).json({ error: 'code, files and entry are required' });
@@ -333,7 +384,16 @@ debugRouter.post('/start', async (req, res) => {
   const started =
     lang === 'python'
       ? await startPython(s, prepared.rootDir, prepared.filePath, bps, env, prepared.cwd)
-      : startNode(s, prepared.rootDir, prepared.filePath, bps, env, prepared.cwd);
+      : startNode(
+          s,
+          prepared.rootDir,
+          // tsx CLI does not expose .ts lines to the inspector; Node's strip-types does
+          lang === 'typescript' ? ['--experimental-strip-types', prepared.filePath] : prepared.args,
+          bps,
+          env,
+          prepared.cwd,
+          lang === 'typescript'
+        );
   s.adapter = started.adapter;
   s.runId = startSession(
     started.proc,

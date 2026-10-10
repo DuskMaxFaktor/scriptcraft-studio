@@ -188,6 +188,31 @@ test('node coverage: lcov turned into covered / missing code lines', async () =>
   await api('DELETE', `/api/projects/${p.id}`);
 });
 
+test('node coverage: TypeScript sources stay notMeasured (lcov paints unreachable returns green)', async () => {
+  const p = (
+    await api('POST', '/api/projects', {
+      name: 'tscover',
+      files: [
+        {
+          name: 'lib.ts',
+          content:
+            "export function grade(n: number): string {\n  if (n >= 90) {\n    return 'A';\n  }\n  if (n >= 70) {\n    return 'B';\n  }\n  return 'C';\n}\n",
+        },
+        {
+          name: 'lib.test.ts',
+          content:
+            "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { grade } from './lib.ts';\ntest('B', () => { assert.equal(grade(75), 'B'); });\n",
+        },
+      ],
+    })
+  ).data;
+  const { report, output } = await runTests(p.id, 'node', true);
+  assert.equal(report.passed, 1, output);
+  assert.equal(report.coverage?.files['lib.ts'], undefined, JSON.stringify(report.coverage));
+  assert.ok(report.coverage?.notMeasured?.includes('lib.ts'), JSON.stringify(report.coverage));
+  await api('DELETE', `/api/projects/${p.id}`);
+});
+
 test('parseLcov: absolute paths, files outside the project and packages are dropped', async () => {
   const { parseLcov } = await import(pathToFileURL(path.join(studioRoot, 'api', 'tests.ts')).href);
   const dir = path.join(tmp, 'lcovdir');

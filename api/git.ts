@@ -584,7 +584,13 @@ gitRouter.get(
     const dir = projectDir(req.params.id);
     const status = await ghStatus();
     const remote = isRepo(dir) ? (await git(dir, ['remote', 'get-url', 'origin'])).stdout.trim() || null : null;
-    return { ...status, remote, repoUrl: isGithubUrl(remote) ? webUrl(remote!) : null };
+    // In-studio "Sign in" opens a Windows cmd window; elsewhere use `gh auth login` in a terminal
+    return {
+      ...status,
+      remote,
+      repoUrl: isGithubUrl(remote) ? webUrl(remote!) : null,
+      loginInStudio: process.platform === 'win32',
+    };
   })
 );
 

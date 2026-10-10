@@ -90,8 +90,10 @@ export function redact(text: string): string {
   const home = os.homedir();
   const user = path.basename(home);
   if (user.length >= 2) {
-    t = t.split(home).join('%USERPROFILE%').split(home.replace(/\\/g, '/')).join('%USERPROFILE%');
+    const homeToken = process.platform === 'win32' ? '%USERPROFILE%' : '$HOME';
+    t = t.split(home).join(homeToken).split(home.replace(/\\/g, '/')).join(homeToken);
     t = t.replace(new RegExp(`([\\\\/]Users[\\\\/])${user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=[\\\\/]|$)`, 'gi'), '$1<user>');
+    t = t.replace(new RegExp(`(/home/|/Users/)${user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=/|$)`, 'g'), '$1<user>');
   }
   const host = os.hostname();
   if (host.length >= 3) t = t.split(host).join('<pc>');
@@ -163,6 +165,9 @@ logsRouter.post('/report', (req, res) => {
 logsRouter.post('/open-folder', (_req, res) => {
   fs.mkdirSync(LOG_DIR(), { recursive: true });
   if (process.env.SCRIPTCRAFT_APPS_DRYRUN) return res.json({ ok: true, dir: LOG_DIR() });
-  if (process.platform === 'win32') spawn('explorer.exe', [LOG_DIR()], { detached: true, stdio: 'ignore' }).unref();
+  const dir = LOG_DIR();
+  if (process.platform === 'win32') spawn('explorer.exe', [dir], { detached: true, stdio: 'ignore' }).unref();
+  else if (process.platform === 'darwin') spawn('open', [dir], { detached: true, stdio: 'ignore' }).unref();
+  else spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
   res.json({ ok: true });
 });

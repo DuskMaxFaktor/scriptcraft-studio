@@ -5,6 +5,7 @@ export type FileLanguage =
   | 'html'
   | 'css'
   | 'bash'
+  | 'powershell'
   | 'sql'
   | 'json'
   | 'markdown'

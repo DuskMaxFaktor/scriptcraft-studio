@@ -102,7 +102,14 @@ Step "Collecting third-party licenses"
 & (Join-Path $Out "runtime\node\node.exe") (Join-Path $Root "scripts\gen_notices.mjs") --root $Out --out $Out
 if ($LASTEXITCODE -ne 0) { throw "Collecting licenses failed" }
 
-# 7. Portable marker + readme
+# 7. Optional Authenticode signature for the launcher (SCRIPTCRAFT_SIGN_THUMBPRINT)
+$launcher = Join-Path $Out "ScriptCraftStudio.exe"
+if (Test-Path $launcher) {
+    . (Join-Path $Root "scripts\sign_exe.ps1")
+    Sign-ScriptCraftExe -Path $launcher
+}
+
+# 8. Portable marker + readme
 Set-Content -Path (Join-Path $Out ".portable-build") -Value "Portable build $(Get-Date -Format s)" -Encoding ascii
 $readme = @"
 ScriptCraft Studio - портативная версия
@@ -117,7 +124,7 @@ ScriptCraft Studio - портативная версия
 "@
 Set-Content -Path (Join-Path $Out "README-PORTABLE.txt") -Value $readme -Encoding utf8
 
-# 8. ZIP
+# 9. ZIP
 Step "Creating ZIP"
 if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
 Push-Location $OutParent

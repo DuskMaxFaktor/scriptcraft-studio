@@ -208,6 +208,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       case 'css':
         return <Globe className="w-3.5 h-3.5 text-sky-400" />;
       case 'bash':
+      case 'powershell':
         return <Terminal className="w-3.5 h-3.5 text-emerald-400" />;
       case 'sql':
         return <Database className="w-3.5 h-3.5 text-indigo-400" />;

@@ -22,6 +22,8 @@ export function detectLanguageFromName(filename: string): FileLanguage {
     case 'sh':
     case 'bash':
       return 'bash';
+    case 'ps1':
+      return 'powershell';
     case 'sql':
       return 'sql';
     case 'json':
