@@ -260,6 +260,179 @@ const HexView: React.FC<{ projectId: string; path: string; version: number; tota
   );
 };
 
+
+// ---------- Edit one instruction: assemble new text, fit it into the old bytes, patch ----------
+/** The architecture's no-op, to fill what a shorter instruction leaves free (little-endian bytes). */
+const NOP: Record<string, string> = { x86: '90', x64: '90', arm64: '1f2003d5', arm: '00f020e3', thumb: '00bf' };
+
+interface AsmResult {
+  bytes: string;
+  size: number;
+}
+
+/**
+ * The plan for writing `size` new bytes at `target`: which instructions get overwritten (the target and,
+ * when the new code is longer, the following ones) and how many bytes are left to fill with NOPs.
+ */
+export function fitInstruction(target: Instruction, following: Instruction[], size: number) {
+  const covered = [target];
+  let total = target.bytes.length / 2;
+  for (const next of following) {
+    if (total >= size) break;
+    // Only instructions right after each other (no gap of data between them)
+    const last = covered[covered.length - 1];
+    if (next.offset !== last.offset + last.bytes.length / 2) break;
+    covered.push(next);
+    total += next.bytes.length / 2;
+  }
+  return { covered, room: total, pad: total - size, fits: total >= size };
+}
+
+const InstructionEditor: React.FC<{
+  projectId: string;
+  path: string;
+  arch: string;
+  target: Instruction;
+  following: Instruction[];
+  onDone: () => void;
+  onCancel: () => void;
+}> = ({ projectId, path, arch, target, following, onDone, onCancel }) => {
+  const { t } = useI18n();
+  const [text, setText] = useState(`${target.mnemonic} ${target.op}`.trim());
+  const [asm, setAsm] = useState<AsmResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [needLib, setNeedLib] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [tick, setTick] = useState(0);
+
+  // Assemble while typing (at the instruction's own address, so jumps come out right)
+  useEffect(() => {
+    let alive = true;
+    const timer = setTimeout(() => {
+      if (!text.trim()) {
+        setAsm(null);
+        setError(null);
+        return;
+      }
+      post('/api/disasm/assemble', { arch, addr: target.addr, code: text })
+        .then((r: AsmResult) => {
+          if (!alive) return;
+          setAsm(r);
+          setError(null);
+          setNeedLib(false);
+        })
+        .catch((e: any) => {
+          if (!alive) return;
+          setAsm(null);
+          if (e.code === 'libs-missing') setNeedLib(true);
+          else setError(e.message);
+        });
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [text, tick]);
+
+  const nop = NOP[arch];
+  const plan = asm ? fitInstruction(target, following, asm.size) : null;
+  const padOk = !!plan && (plan.pad === 0 || (!!nop && plan.pad % (nop.length / 2) === 0));
+  const finalHex = plan && asm && padOk ? asm.bytes + (nop ? nop.repeat(plan.pad / (nop.length / 2)) : '') : '';
+  const unchanged = finalHex === target.bytes;
+
+  const apply = async () => {
+    if (!finalHex || unchanged) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await post('/api/disasm/patch', { projectId, path, edits: [{ offset: target.offset, hex: finalHex }] });
+      onDone();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const install = async () => {
+    setInstalling(true);
+    try {
+      const { runId } = await post('/api/disasm/install', {});
+      await readInstall(runId, () => {});
+      setTick((x) => x + 1);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const spaced = (h: string) => h.replace(/(..)/g, '$1 ').trim();
+  return (
+    <div className="my-1 p-2 rounded border border-indigo-500/40 bg-indigo-500/5 space-y-1.5 font-sans text-[11px]" data-ins-editor>
+      <div className="flex items-center gap-2">
+        <span className="text-slate-400 font-mono">{hex(target.addr, 8)}</span>
+        <input
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void apply();
+            if (e.key === 'Escape') onCancel();
+          }}
+          placeholder="nop / jmp 0x401020 / mov eax, 1; ret"
+          className="flex-1 bg-deep border border-slate-700 rounded px-2 py-1 font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
+          data-ins-input
+        />
+        <button
+          onClick={apply}
+          disabled={!finalHex || unchanged || saving}
+          className="flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-semibold disabled:opacity-40"
+          data-ins-apply
+        >
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} {t('disasm.asmApply')}
+        </button>
+        <button onClick={onCancel} className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-white">
+          {t('dialog.cancel')}
+        </button>
+      </div>
+      {needLib && (
+        <div className="flex items-center gap-2 text-amber-200">
+          {t('disasm.asmNeedLib')}
+          <button onClick={install} disabled={installing} className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-50">
+            {installing ? <Loader2 className="w-3 h-3 animate-spin inline" /> : null} {t('disasm.install')}
+          </button>
+        </div>
+      )}
+      {error && <div className="text-rose-300 font-mono" data-ins-error>{error}</div>}
+      {asm && plan && (
+        <div className="space-y-0.5 text-slate-300" data-ins-plan>
+          <div className="font-mono">
+            <span className="text-slate-500">{t('disasm.asmBytes')}</span> <span className="text-emerald-300" data-ins-bytes>{spaced(asm.bytes)}</span>
+            {plan.pad > 0 && padOk && <span className="text-slate-500"> + {spaced(nop.repeat(plan.pad / (nop.length / 2)))} (nop)</span>}
+            <span className="text-slate-500"> · {t('disasm.asmSize', { size: asm.size, old: target.bytes.length / 2 })}</span>
+          </div>
+          {!plan.fits && <div className="text-rose-300">{t('disasm.asmNoRoom')}</div>}
+          {plan.fits && plan.pad > 0 && !padOk && <div className="text-rose-300">{t('disasm.asmNoNop', { pad: plan.pad })}</div>}
+          {plan.covered.length > 1 && plan.fits && (
+            <div className="text-amber-200" data-ins-overwrites>
+              {t('disasm.asmOverwrites', { count: plan.covered.length - 1 })}{' '}
+              <span className="font-mono">
+                {plan.covered
+                  .slice(1)
+                  .map((c) => `${hex(c.addr, 8)} ${c.mnemonic} ${c.op}`.trim())
+                  .join(' · ')}
+              </span>
+            </div>
+          )}
+          {unchanged && <div className="text-slate-500">{t('disasm.asmSame')}</div>}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ---------- Disassembly ----------
 const Disassembly: React.FC<{ projectId: string; path: string; info: Info; version: number }> = ({ projectId, path, info, version }) => {
   const { t } = useI18n();
@@ -271,6 +444,9 @@ const Disassembly: React.FC<{ projectId: string; path: string; info: Info; versi
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [flash, setFlash] = useState<number | null>(null);
+  const [editAddr, setEditAddr] = useState<number | null>(null);
+  const [patched, setPatched] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const section = info.sections.find((s) => s.name === sectionName);
   const canDisasm = info.arch && DISASM_ARCHS.has(info.arch);
@@ -329,7 +505,7 @@ const Disassembly: React.FC<{ projectId: string; path: string; info: Info; versi
     return () => {
       alive = false;
     };
-  }, [projectId, path, sectionName, version, canDisasm]);
+  }, [projectId, path, sectionName, version, canDisasm, patched]);
 
   if (!canDisasm) return <p className="p-4 text-slate-400 text-xs">{t('disasm.noDisasmArch', { arch: info.archName || info.arch || '?' })}</p>;
 
@@ -360,17 +536,49 @@ const Disassembly: React.FC<{ projectId: string; path: string; info: Info; versi
       </div>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto p-3 font-mono text-[11px] leading-5" data-disasm-view>
         {error && <p className="text-rose-300">{error}</p>}
+        {notice && <p className="mb-2 text-emerald-300 font-sans" data-ins-notice>{notice}</p>}
         {!error && !loading && ins.length === 0 && <p className="text-slate-400">{t('disasm.noCode')}</p>}
         {!error && ins.length > 0 && (
           <table className="border-collapse">
             <tbody>
               {shown.map((x) => (
-                <tr key={x.addr} data-ins={x.addr} className={flash === x.addr ? 'bg-amber-500/25' : 'hover:bg-slate-800/40'}>
-                  <td className="pr-4 text-indigo-400 select-none">{hex(x.addr, 8)}</td>
-                  <td className="pr-4 text-slate-500 select-none">{x.bytes.replace(/(..)/g, '$1 ').trim()}</td>
-                  <td className="pr-3 text-sky-300">{x.mnemonic}</td>
-                  <td className="text-slate-200">{renderOp(x.op)}</td>
-                </tr>
+                <React.Fragment key={x.addr}>
+                  <tr data-ins={x.addr} className={`group ${flash === x.addr ? 'bg-amber-500/25' : 'hover:bg-slate-800/40'}`} onDoubleClick={() => setEditAddr(x.addr)}>
+                    <td className="pr-4 text-indigo-400 select-none">{hex(x.addr, 8)}</td>
+                    <td className="pr-4 text-slate-500 select-none">{x.bytes.replace(/(..)/g, '$1 ').trim()}</td>
+                    <td className="pr-3 text-sky-300">{x.mnemonic}</td>
+                    <td className="text-slate-200">{renderOp(x.op)}</td>
+                    <td className="pl-3">
+                      <button
+                        onClick={() => setEditAddr(x.addr)}
+                        className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-indigo-300"
+                        title={t('disasm.asmEdit')}
+                        data-ins-edit
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </td>
+                  </tr>
+                  {editAddr === x.addr && (
+                    <tr>
+                      <td colSpan={5}>
+                        <InstructionEditor
+                          projectId={projectId}
+                          path={path}
+                          arch={info.arch!}
+                          target={x}
+                          following={ins.slice(ins.indexOf(x) + 1, ins.indexOf(x) + 64)}
+                          onCancel={() => setEditAddr(null)}
+                          onDone={() => {
+                            setEditAddr(null);
+                            setNotice(t('disasm.asmSaved', { addr: hex(x.addr, 8) }));
+                            setPatched((v) => v + 1);
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

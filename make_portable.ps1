@@ -93,9 +93,9 @@ if (-not (Test-Path $GetPip)) { Invoke-WebRequest "https://bootstrap.pypa.io/get
 & (Join-Path $PyDir "python.exe") $GetPip --no-warn-script-location --disable-pip-version-check
 if ($LASTEXITCODE -ne 0) { throw "Installing pip into the bundled Python failed" }
 # Ruff (formatter and checks), Jedi (Python hints), pytest (the "Tests" tab), PyInstaller ("Build .exe"),
-# and pefile + capstone (the "Disassembler": inspect/patch .exe files); the studio finds them in runtime\python
-& (Join-Path $PyDir "python.exe") -m pip install ruff jedi pytest pyinstaller pefile capstone --no-warn-script-location --disable-pip-version-check
-if ($LASTEXITCODE -ne 0) { throw "Installing Ruff, Jedi, pytest, PyInstaller, pefile and capstone into the bundled Python failed" }
+# and pefile + capstone + keystone (the "Disassembler": inspect, assemble, patch .exe files); the studio finds them in runtime\python
+& (Join-Path $PyDir "python.exe") -m pip install ruff jedi pytest pyinstaller pefile capstone keystone-engine --no-warn-script-location --disable-pip-version-check
+if ($LASTEXITCODE -ne 0) { throw "Installing Ruff, Jedi, pytest, PyInstaller, pefile, capstone and keystone into the bundled Python failed" }
 
 # 6b. Licenses of everything inside (npm packages, Node.js, Python, pip packages)
 Step "Collecting third-party licenses"

@@ -1238,6 +1238,48 @@ test('disassembler: clicking a jmp target jumps to it; search filters instructio
   await expect(viewer.locator('[data-ins]')).toContainText('ret');
 });
 
+test('disassembler: an instruction is rewritten in assembly; shorter code is padded with nop', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  // Same tiny x64 PE: jmp 0x14000100a ; 5×nop ; sub rsp,0x28 ; ret
+  const program = [
+    'import base64, zlib',
+    "open('sample.exe', 'wb').write(zlib.decompress(base64.b64decode('eJzzjWIgGzgwMDAEuDIwpLQxooh/YFBi4GZiYOBHFhSAYgYGB0YYn4mBgQ0qDaMZFCDiIMBMpDsEyPcC1YBeSWpFCQPUz1C/wfwBAwoMDAkD5Dyc4CUr0L0TQMCj+Y3G4YF2ziigMwAAckINQA==')))",
+    "print('exe ready')",
+  ].join('\n');
+  const project = await openStudio(page, request, 'Правка exe', [{ name: 'make.py', content: program, isEntry: true }]);
+  await runButton(page).click();
+  await expect(output(page)).toContainText('exe ready');
+  await page.locator('[data-asset="sample.exe"]').click({ timeout: 15_000 });
+  const viewer = page.locator('[data-asset-viewer="sample.exe"]');
+  await viewer.locator('[data-disasm-tab="disasm"]').click();
+  const first = viewer.locator('[data-ins="5368713216"]');
+  await expect(first).toContainText('jmp');
+
+  // A longer instruction would also overwrite the next ones: the editor says which
+  await first.dblclick();
+  const editor = viewer.locator('[data-ins-editor]');
+  await editor.locator('[data-ins-input]').fill('mov rax, 0x1122334455667788');
+  await expect(editor.locator('[data-ins-bytes]')).toHaveText('48 b8 88 77 66 55 44 33 22 11');
+  await expect(editor.locator('[data-ins-overwrites]')).toContainText('5');
+  await expect(editor.locator('[data-ins-overwrites]')).toContainText('140001009 nop');
+  // A typo: the assembler's error
+  await editor.locator('[data-ins-input]').fill('frobnicate');
+  await expect(editor.locator('[data-ins-error]')).toContainText('frobnicate');
+
+  // jmp (5 bytes: e9 rel32) -> nop (1 byte) + 4 more nops to keep the following code in place
+  await editor.locator('[data-ins-input]').fill('nop');
+  await expect(editor.locator('[data-ins-bytes]')).toHaveText('90');
+  await editor.locator('[data-ins-apply]').click();
+  await expect(viewer.locator('[data-ins-notice]')).toContainText('.bak');
+  await expect(viewer.locator('[data-ins="5368713216"]')).toContainText('nop');
+  await expect(viewer.locator('[data-ins="5368713220"]')).toContainText('nop');
+  await expect(viewer.locator('[data-ins]', { hasText: 'sub' })).toContainText('rsp, 0x28');
+  // The bytes on disk: ten nops in a row now (the 5 new ones + the 5 that were there)
+  const raw = await request.get(`/api/projects/${project.id}/raw?path=sample.exe`);
+  const bytes = Buffer.from(await raw.body());
+  expect(bytes.includes(Buffer.from(Array(10).fill(0x90)))).toBeTruthy();
+});
+
 test('agent: proposes a package install, the user approves, pip runs into the project', async ({ page, request }) => {
   const project = (await (await request.post('/api/projects', { data: { name: 'Install', files: [{ name: 'main.py', language: 'python', content: 'print(1)', isEntry: true }] } })).json()) as { id: string };
   await page.addInitScript((id) => {

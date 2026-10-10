@@ -144,6 +144,21 @@ test('disassemble raw x64 machine code', { skip: !libs.capstone && 'capstone not
   assert.ok(ins.some((i: any) => i.mnemonic === 'ret'));
 });
 
+test('assemble: instructions to bytes at an address, errors name the line', { skip: !libs.keystone && 'keystone not installed' }, async () => {
+  // Jumps are relative to where each line lands: jmp 0x1010 from 0x1001 is eb 0d
+  const r = await api('POST', '/api/disasm/assemble', { arch: 'x64', addr: 0x1000, code: 'nop; jmp 0x1010' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.bytes, '90eb0d');
+  assert.equal(r.data.size, 3);
+  assert.deepEqual(r.data.lines.map((l: any) => [l.addr, l.bytes]), [[0x1000, '90'], [0x1001, 'eb0d']]);
+  assert.equal((await api('POST', '/api/disasm/assemble', { arch: 'x86', addr: 0, code: 'mov eax, 1\nret  # back' })).data.bytes, 'b801000000c3');
+  assert.equal((await api('POST', '/api/disasm/assemble', { arch: 'arm64', addr: 0, code: 'nop' })).data.bytes, '1f2003d5');
+  const bad = await api('POST', '/api/disasm/assemble', { arch: 'x64', addr: 0, code: 'nop\nfrobnicate eax' });
+  assert.equal(bad.status, 422);
+  assert.match(bad.data.error, /line 2 \(frobnicate eax\)/);
+  assert.equal((await api('POST', '/api/disasm/assemble', { arch: 'x64', code: '  ' })).status, 400);
+});
+
 test('analyze a PE: arch, sections, entry point, strings', { skip: !libs.pefile && 'needs pefile' }, async () => {
   const r = await api('POST', '/api/disasm/analyze', { projectId: pid, path: 'sample.exe' });
   assert.equal(r.status, 200, JSON.stringify(r.data));

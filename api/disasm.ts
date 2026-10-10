@@ -88,9 +88,9 @@ function runPython(request: object, timeoutMs = ANALYZE_MS): Promise<any> {
   });
 }
 
-export function hasDisasmLibs(): { pefile: boolean; capstone: boolean } {
+export function hasDisasmLibs(): { pefile: boolean; capstone: boolean; keystone: boolean } {
   const check = (mod: string) => spawnSync(PY(), ['-c', `import ${mod}`], { env: pyEnv(), windowsHide: true, timeout: 20_000 }).status === 0;
-  return { pefile: check('pefile'), capstone: check('capstone') };
+  return { pefile: check('pefile'), capstone: check('capstone'), keystone: check('keystone') };
 }
 
 const wrap =
@@ -115,14 +115,14 @@ disasmRouter.get(
   })
 );
 
-/** Install pefile + capstone into the studio's tools folder; output streams like a program run. */
+/** Install pefile + capstone (+ keystone, the assembler) into the studio's tools folder; output streams like a program run. */
 disasmRouter.post(
   '/install',
   wrap(async () => {
     fs.mkdirSync(TOOLS_DIR, { recursive: true });
     const proc = spawnCommand(
       PY(),
-      ['-m', 'pip', 'install', '--upgrade', '--target', TOOLS_DIR, 'pefile', 'capstone', '--disable-pip-version-check', '--no-warn-script-location'],
+      ['-m', 'pip', 'install', '--upgrade', '--target', TOOLS_DIR, 'pefile', 'capstone', 'keystone-engine', '--disable-pip-version-check', '--no-warn-script-location'],
       process.cwd()
     );
     return { runId: startSession(proc, undefined, 5 * 60 * 1000) };
@@ -146,6 +146,18 @@ disasmRouter.post(
     const vaddr = Math.max(0, Math.floor(Number(req.body?.vaddr) || offset));
     const arch = String(req.body?.arch || 'x64');
     return runPython({ cmd: 'disasm', file, offset, length, vaddr, arch }, 30_000);
+  })
+);
+
+/** Assembly text -> bytes at an address (for "Edit instruction"); nothing is written here. */
+disasmRouter.post(
+  '/assemble',
+  wrap(async (req) => {
+    const arch = String(req.body?.arch || 'x64');
+    const code = String(req.body?.code || '');
+    if (!code.trim()) throw new DisasmError(400, 'Nothing to assemble');
+    const addr = Math.max(0, Math.floor(Number(req.body?.addr) || 0));
+    return runPython({ cmd: 'assemble', arch, addr, code }, 20_000);
   })
 );
 

@@ -23,5 +23,6 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": ["node_modules", "dist", "portable", "build-cache", "projects", "tools", "runtime", "test-results", "playwright-report"]
 }

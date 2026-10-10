@@ -159,6 +159,46 @@ def disasm(req):
     return {"instructions": out, "arch": arch}
 
 
+def assemble(req):
+    """Assembly text -> bytes at the given address (Keystone). Lines are assembled one by one, so an error
+    names its line; jumps are relative to the address each line lands at."""
+    try:
+        import keystone
+    except Exception:
+        raise ValueError("keystone is not installed")
+    arch = req.get("arch") or "x64"
+    modes = {
+        "x86": (keystone.KS_ARCH_X86, keystone.KS_MODE_32),
+        "x64": (keystone.KS_ARCH_X86, keystone.KS_MODE_64),
+        "arm": (keystone.KS_ARCH_ARM, keystone.KS_MODE_ARM),
+        "thumb": (keystone.KS_ARCH_ARM, keystone.KS_MODE_THUMB),
+        "arm64": (keystone.KS_ARCH_ARM64, keystone.KS_MODE_LITTLE_ENDIAN),
+    }
+    if arch not in modes:
+        raise ValueError("Unsupported architecture: %s" % arch)
+    ks = keystone.Ks(*modes[arch])
+    addr = int(req.get("addr", 0))
+    code = str(req.get("code", ""))
+    if len(code) > 4000:
+        raise ValueError("Too much code")
+    lines = []
+    out = b""
+    for n, raw in enumerate(code.replace(";", "\n").split("\n"), 1):
+        text = raw.split("#")[0].strip()
+        if not text:
+            continue
+        try:
+            enc, _ = ks.asm(text, addr + len(out))
+        except keystone.KsError as e:
+            raise ValueError("line %d (%s): %s" % (n, text, e))
+        b = bytes(enc or [])
+        if not b:
+            raise ValueError("line %d (%s): nothing assembled" % (n, text))
+        lines.append({"text": text, "addr": addr + len(out), "bytes": b.hex()})
+        out += b
+    return {"bytes": out.hex(), "size": len(out), "lines": lines}
+
+
 def main():
     try:
         req = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
@@ -167,6 +207,8 @@ def main():
             result = analyze(req)
         elif cmd == "disasm":
             result = disasm(req)
+        elif cmd == "assemble":
+            result = assemble(req)
         else:
             raise ValueError("Unknown command: %s" % cmd)
         sys.stdout.write(json.dumps({"ok": True, "result": result}))
