@@ -20,6 +20,11 @@ test('bundled tools are found', async ({ request }) => {
   const tools = await (await request.get('/api/code/tools')).json();
   expect(tools.ruff, 'Ruff from runtime\\python').toBeTruthy();
   expect(tools.eslint).toBeTruthy();
+  // Disassembler: pefile, capstone and the assembler (keystone) come with the bundled Python
+  const disasm = await (await request.get('/api/disasm/available')).json();
+  expect(disasm).toMatchObject({ pefile: true, capstone: true, keystone: true });
+  const asm = await (await request.post('/api/disasm/assemble', { data: { arch: 'x64', addr: 4096, code: 'nop; ret' } })).json();
+  expect(asm.bytes).toBe('90c3');
 });
 
 test('Python program runs with the bundled Python (Cyrillic file name)', async ({ page, request }) => {
