@@ -109,6 +109,22 @@ test('update check: newer release found, a portable copy only gets the page', as
   assert.equal((await api('POST', '/api/update/check')).data.available, false);
 });
 
+test('update check without a connection: a clear "offline" answer, not a server error', async () => {
+  // A port nobody listens on: the request is refused like with no internet
+  const closed = http.createServer();
+  await new Promise<void>((r) => closed.listen(0, '127.0.0.1', () => r()));
+  const port = (closed.address() as AddressInfo).port;
+  await new Promise<void>((r) => closed.close(() => r()));
+  process.env.SCRIPTCRAFT_UPDATE_API = `http://127.0.0.1:${port}`;
+  try {
+    const r = await api('POST', '/api/update/check');
+    assert.equal(r.status, 504);
+    assert.equal(r.data.code, 'offline');
+  } finally {
+    process.env.SCRIPTCRAFT_UPDATE_API = ghBase;
+  }
+});
+
 test('download: a file that cannot be written fails the download, never the server', async () => {
   const { download } = await import(pathToFileURL(path.join(studioRoot, 'api', 'update.ts')).href);
   // The target is a folder: the write stream errors (like a full disk or a locked file would)

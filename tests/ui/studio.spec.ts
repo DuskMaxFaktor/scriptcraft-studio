@@ -40,6 +40,11 @@ async function projectFile(request: APIRequestContext, id: string, name: string)
   return data.files.find((f: { name: string }) => f.name === name)?.content as string | undefined;
 }
 
+// The disassembler needs pefile + capstone (and keystone to assemble) — the same check the studio makes
+async function disasmLibs(request: APIRequestContext) {
+  return (await (await request.get('/api/disasm/available')).json()) as { ready: boolean; keystone: boolean };
+}
+
 test.afterEach(async ({ request }) => {
   // Remove the projects this test created
   const { projects } = (await (await request.get('/api/projects')).json()) as { projects: { id: string }[] };
@@ -1314,6 +1319,7 @@ test('other files: an image and a SQLite database made by a program open in the 
 
 test('disassembler: clicking a jmp target jumps to it; search filters instructions', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
+  test.skip(!(await disasmLibs(request)).ready, 'pefile/capstone not installed');
   // A tiny x64 PE: jmp 0x14000100a ; 5×nop ; sub rsp,0x28 ; ret
   const program = [
     'import base64, zlib',
@@ -1341,6 +1347,7 @@ test('disassembler: clicking a jmp target jumps to it; search filters instructio
 
 test('an .exe picked with "Add files from PC" goes into the project and opens in the disassembler', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
+  test.skip(!(await disasmLibs(request)).ready, 'pefile/capstone not installed');
   // The same tiny x64 PE as the other disassembler tests
   const exe = zlib.inflateSync(
     Buffer.from('eJzzjWIgGzgwMDAEuDIwpLQxooh/YFBi4GZiYOBHFhSAYgYGB0YYn4mBgQ0qDaMZFCDiIMBMpDsEyPcC1YBeSWpFCQPUz1C/wfwBAwoMDAkD5Dyc4CUr0L0TQMCj+Y3G4YF2ziigMwAAckINQA==', 'base64')
@@ -1359,6 +1366,8 @@ test('an .exe picked with "Add files from PC" goes into the project and opens in
 
 test('disassembler: an instruction is rewritten in assembly; shorter code is padded with nop', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
+  const libs = await disasmLibs(request);
+  test.skip(!libs.ready || !libs.keystone, 'pefile/capstone/keystone not installed');
   // Same tiny x64 PE: jmp 0x14000100a ; 5×nop ; sub rsp,0x28 ; ret
   const program = [
     'import base64, zlib',

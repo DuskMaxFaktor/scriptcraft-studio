@@ -20,8 +20,22 @@ const apiBase = () => (process.env.SCRIPTCRAFT_UPDATE_API || 'https://api.github
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
 class UpdateError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string
+  ) {
     super(message);
+  }
+}
+
+// No connection, DNS failure, timeout: a clear "offline" answer instead of a bare "fetch failed"
+async function reach(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err: any) {
+    const timeout = err?.name === 'TimeoutError';
+    throw new UpdateError(504, timeout ? 'GitHub did not answer in time' : 'No connection to GitHub', 'offline');
   }
 }
 
@@ -65,7 +79,7 @@ interface Release {
 }
 
 async function getJson(url: string): Promise<any> {
-  const res = await fetch(url, {
+  const res = await reach(url, {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ScriptCraft-Studio' },
     signal: AbortSignal.timeout(15000),
   });
@@ -105,7 +119,7 @@ function checkDownloadUrl(u: string) {
 
 export async function download(url: string, file: string) {
   checkDownloadUrl(url);
-  const res = await fetch(url, { headers: { 'User-Agent': 'ScriptCraft-Studio' }, signal: AbortSignal.timeout(15 * 60 * 1000) });
+  const res = await reach(url, { headers: { 'User-Agent': 'ScriptCraft-Studio' }, signal: AbortSignal.timeout(15 * 60 * 1000) });
   if (!res.ok || !res.body) throw new UpdateError(502, `Download failed (${res.status})`);
   const out = fs.createWriteStream(file);
   // Disk full, an antivirus lock...: the error ends this update instead of crashing the studio
@@ -160,7 +174,7 @@ const wrap =
     } catch (err: any) {
       const status = err instanceof UpdateError ? err.status : 500;
       if (status === 500) console.error('Update error:', err);
-      res.status(status).json({ error: err.message || 'Update error' });
+      res.status(status).json({ error: err.message || 'Update error', code: err.code });
     }
   };
 
