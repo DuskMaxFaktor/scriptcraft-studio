@@ -20,8 +20,22 @@ const apiBase = () => (process.env.SCRIPTCRAFT_UPDATE_API || 'https://api.github
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
 class UpdateError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string
+  ) {
     super(message);
+  }
+}
+
+// No connection, DNS failure, timeout: a clear "offline" answer instead of a bare "fetch failed"
+async function reach(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err: any) {
+    const timeout = err?.name === 'TimeoutError';
+    throw new UpdateError(504, timeout ? 'GitHub did not answer in time' : 'No connection to GitHub', 'offline');
   }
 }
 
@@ -65,7 +79,7 @@ interface Release {
 }
 
 async function getJson(url: string): Promise<any> {
-  const res = await fetch(url, {
+  const res = await reach(url, {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ScriptCraft-Studio' },
     signal: AbortSignal.timeout(15000),
   });
@@ -103,18 +117,40 @@ function checkDownloadUrl(u: string) {
   if (url.protocol !== 'https:' || !/(^|\.)github(usercontent)?\.com$/.test(url.hostname)) throw new UpdateError(502, 'The release points outside GitHub');
 }
 
-async function download(url: string, file: string) {
+export async function download(url: string, file: string) {
   checkDownloadUrl(url);
-  const res = await fetch(url, { headers: { 'User-Agent': 'ScriptCraft-Studio' }, signal: AbortSignal.timeout(15 * 60 * 1000) });
+  const res = await reach(url, { headers: { 'User-Agent': 'ScriptCraft-Studio' }, signal: AbortSignal.timeout(15 * 60 * 1000) });
   if (!res.ok || !res.body) throw new UpdateError(502, `Download failed (${res.status})`);
   const out = fs.createWriteStream(file);
+  // Disk full, an antivirus lock...: the error ends this update instead of crashing the studio
+  let failed: Error | null = null;
+  const failedOnce = new Promise<never>((_, reject) =>
+    out.once('error', (e) => {
+      failed = e;
+      reject(new UpdateError(500, `Cannot save the download: ${e.message}`));
+    })
+  );
+  failedOnce.catch(() => {});
   const reader = res.body.getReader();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (!out.write(value)) await new Promise<void>((r) => out.once('drain', () => r()));
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (failed) throw failed;
+      if (!out.write(value)) await Promise.race([new Promise<void>((r) => out.once('drain', () => r())), failedOnce]);
+    }
+    await Promise.race([new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve()))), failedOnce]);
+  } catch (err) {
+    reader.cancel().catch(() => {});
+    out.destroy();
+    // Remove the half-written file; cleaning up must never hide the real reason
+    try {
+      if (fs.statSync(file).isFile()) fs.rmSync(file, { force: true });
+    } catch {
+      /* nothing was written */
+    }
+    throw err instanceof UpdateError ? err : new UpdateError(500, `Download failed: ${(err as Error).message}`);
   }
-  await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
 }
 
 const sha256 = (file: string) =>
@@ -138,7 +174,7 @@ const wrap =
     } catch (err: any) {
       const status = err instanceof UpdateError ? err.status : 500;
       if (status === 500) console.error('Update error:', err);
-      res.status(status).json({ error: err.message || 'Update error' });
+      res.status(status).json({ error: err.message || 'Update error', code: err.code });
     }
   };
 

@@ -178,8 +178,8 @@ test('projects: binary files are uploaded as they are; a taken name gets a free 
   const dir = path.join(tmp, 'projects', p.id);
   const bytes = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0xff]);
   const up = (name: string, body: Buffer) =>
-    fetch(`${base}/api/projects/${p.id}/upload?path=${encodeURIComponent(name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body }).then(async (r) => ({ status: r.status, data: await r.json() }));
-  let r = await up('tools/app.exe', bytes);
+    fetch(`${base}/api/projects/${p.id}/upload?path=${encodeURIComponent(name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: new Uint8Array(body) }).then(async (r) => ({ status: r.status, data: await r.json() }));
+  const r = await up('tools/app.exe', bytes);
   assert.equal(r.status, 200);
   assert.equal(r.data.name, 'tools/app.exe');
   assert.deepEqual(fs.readFileSync(path.join(dir, 'tools', 'app.exe')), bytes);
@@ -194,6 +194,26 @@ test('projects: binary files are uploaded as they are; a taken name gets a free 
   for (const bad of ['../evil.exe', '.env', '.git/x', 'node_modules/x.dll']) assert.equal((await up(bad, bytes)).status, 400, bad);
   assert.equal((await up('empty.bin', Buffer.alloc(0))).status, 400);
   await api('DELETE', `/api/projects/${p.id}`);
+});
+
+test('projects: one damaged project file does not hide the other projects; reserved Windows names refused', async () => {
+  const good = (await api('POST', '/api/projects', { name: 'healthy', files: [{ name: 'a.py', content: '1' }] })).data;
+  const bad = (await api('POST', '/api/projects', { name: 'broken', files: [{ name: 'a.py', content: '1' }] })).data;
+  fs.writeFileSync(path.join(tmp, 'projects', bad.id, '.scriptcraft.json'), '{"id": "broken", "na');
+  const list = await api('GET', '/api/projects');
+  assert.equal(list.status, 200);
+  assert.ok(list.data.projects.some((x: any) => x.id === good.id));
+  assert.ok(!list.data.projects.some((x: any) => x.id === bad.id));
+  // The meta file is written through a temporary file: nothing is left behind
+  assert.ok(!fs.readdirSync(path.join(tmp, 'projects', good.id), { recursive: true }).some((f) => String(f).endsWith('.tmp')));
+  for (const name of ['nul.py', 'CON', 'aux.txt', 'src/com1.js', 'LPT9.md']) {
+    const r = await api('PUT', `/api/projects/${good.id}`, { files: [{ name, content: 'x' }] });
+    assert.equal(r.status, 400, name);
+    assert.match(r.data.error, /reserved/);
+  }
+  assert.equal((await api('PUT', `/api/projects/${good.id}`, { files: [{ name: 'console.py', content: 'x' }, { name: 'nullable.js', content: 'y' }] })).status, 200);
+  fs.rmSync(path.join(tmp, 'projects', bad.id), { recursive: true, force: true });
+  await api('DELETE', `/api/projects/${good.id}`);
 });
 
 test('projects: chat history is stored per project', async () => {
@@ -263,6 +283,38 @@ test('interactive run: stdin reaches input() and output streams', { skip: !hasPy
   });
   assert.match(out, /Hello, Ann!/);
   assert.equal(exit.code, 0);
+});
+
+test('interactive run: Cyrillic output split across pipe chunks stays whole', { skip: !hasPython && 'python not installed' }, async () => {
+  // The first byte of "п" arrives in one chunk, the rest after a pause in another: a boundary inside a letter
+  const code = [
+    'import sys, time',
+    'b = "привет мир".encode("utf-8")',
+    'sys.stdout.buffer.write(b[:1]); sys.stdout.buffer.flush()',
+    'time.sleep(0.3)',
+    'sys.stdout.buffer.write(b[1:] + b"\\n"); sys.stdout.buffer.flush()',
+  ].join('\n');
+  const { data } = await api('POST', '/api/run/start', { language: 'python', code });
+  const { out, exit } = await readSession(data.runId);
+  assert.equal(exit.code, 0);
+  assert.ok(!out.includes('�'), `no replacement characters: ${JSON.stringify(out)}`);
+  assert.match(out, /привет мир/);
+});
+
+test('run: a project too big for an unsaved run is refused with a clear message', async () => {
+  const big = 'x'.repeat(11 * 1024 * 1024);
+  const r = await api('POST', '/api/run/start', {
+    language: 'python',
+    code: 'print(1)',
+    entry: 'main.py',
+    files: [
+      { name: 'main.py', content: 'print(1)' },
+      { name: 'a.txt', content: big },
+      { name: 'b.txt', content: big },
+    ],
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /too big .* save it/);
 });
 
 test('interactive run: Stop kills the program', async () => {
@@ -616,6 +668,9 @@ test('web preview: serves project files as a site on its own port, safely', asyn
   assert.equal((await fetch(`${pv}/missing.html`)).status, 404);
   assert.equal((await fetch(`${pv}/.scriptcraft.json`)).status, 400, 'service files are not served');
   assert.equal((await fetch(`${pv}/..%2F..%2Fsettings.json`)).status, 400, 'no path traversal');
+  const malformed = await fetch(`${pv}/100%done.html`);
+  assert.equal(malformed.status, 400, 'a broken %-escape is a bad request, not a server error');
+  assert.doesNotMatch(await malformed.text(), /node_modules|\n\s+at /, 'no stack trace');
 
   const http = await import('http');
   const status = await new Promise<number>((resolve) => {

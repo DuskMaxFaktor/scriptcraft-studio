@@ -111,3 +111,18 @@ test('restore: a project from a backup comes back as a new project; nothing esca
   assert.equal((await api('GET', '/api/backups/..%2Fsettings.json/projects')).status, 400);
   assert.equal((await api('POST', `/api/backups/${latest.file}/restore`, { id: 'nope' })).status, 404);
 });
+
+test('backup: a big file goes into the archive whole (streamed, not held in memory)', { timeout: 120_000 }, async () => {
+  const p = (await api('POST', '/api/projects', { name: 'big', files: [{ name: 'main.py', content: 'print(1)' }] })).data;
+  // 12 MB of varied bytes: above the streaming threshold, poorly compressible
+  const big = Buffer.alloc(12 * 1024 * 1024);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 2654435761) >>> 24;
+  fs.writeFileSync(path.join(tmp, 'projects', p.id, 'video.bin'), big);
+  const made = await api('POST', '/api/backups/now');
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  const zip = await JSZip.loadAsync(fs.readFileSync(path.join(bk, made.data.file)));
+  const inZip = await zip.file(`projects/${p.id}/video.bin`)!.async('nodebuffer');
+  assert.ok(inZip.equals(big));
+  assert.ok(!fs.readdirSync(bk).some((f) => f.endsWith('.part')), 'no half-written archive left');
+  await api('DELETE', `/api/projects/${p.id}`);
+});

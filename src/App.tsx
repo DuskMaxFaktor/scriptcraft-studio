@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { ExecutionPanel } from './components/ExecutionPanel.tsx';
@@ -56,6 +56,8 @@ export default function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   /** name -> content the server has for the open project (what an autosave can leave out) */
   const savedContentRef = useRef<Map<string, string>>(new Map());
+  /** A run / debug session is being started (e.g. waiting for the risky-code question) */
+  const startingRef = useRef(false);
   /** Refresh the list of binary files (pictures, programs...) of the open project */
   const reloadAssetsRef = useRef<() => Promise<unknown>>(async () => {});
   const [aboutTab, setAboutTab] = useState<'help' | 'updates' | 'report' | 'legal'>('updates');
@@ -307,8 +309,13 @@ export default function App() {
   const handleDebug = useCallback(async () => {
     if (debugRef.current) return;
     const file = entryFile || activeFile;
-    if (!file || isRunning) return;
-    if (!(await confirmRiskyRun(file.content, file.name))) return;
+    if (!file || isRunning || startingRef.current) return;
+    startingRef.current = true;
+    try {
+      if (!(await confirmRiskyRun(file.content, file.name))) return;
+    } finally {
+      startingRef.current = false;
+    }
     const language = debuggableLanguage(file.name);
     if (!language) {
       addLog({ id: generateId(), type: 'warn', message: t('debug.unsupported'), timestamp: getTimestamp() });
@@ -378,9 +385,15 @@ export default function App() {
 
   const handleRunCode = useCallback(async (runActive = false) => {
     const file = (runActive ? activeFile : entryFile || activeFile) || null;
-    if (!file || isRunning) return;
-    // Code that deletes folders, edits the registry, downloads and runs things...: one more question
-    if (!(await confirmRiskyRun(file.content, file.name))) return;
+    if (!file || isRunning || startingRef.current) return;
+    // Code that deletes folders, edits the registry, downloads and runs things...: one more question.
+    // startingRef keeps a second Run (button, Ctrl+Enter) out while the question is open
+    startingRef.current = true;
+    try {
+      if (!(await confirmRiskyRun(file.content, file.name))) return;
+    } finally {
+      startingRef.current = false;
+    }
     setIsRunning(true);
     setPanelCollapsed(false);
     setTables([]);
@@ -661,6 +674,8 @@ export default function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       // While a shortcut is being recorded, the key belongs to that window
       if ((e.target as HTMLElement | null)?.closest?.('[data-keybinding-recorder]')) return;
+      // A question is on screen (delete? run risky code?): its keys belong to it, not to the studio
+      if (document.querySelector('[data-dialog]')) return;
       const id = studioCommandFor(e);
       if (!id) {
         // F5 never reloads the page
@@ -771,9 +786,20 @@ export default function App() {
     }
   };
 
-  const handleImportAsProject = async (name: string, payload: ProjectFilePayload[]) => {
+  const handleImportAsProject = async (name: string, payload: ProjectFilePayload[], binaries: { name: string; data: Blob }[] = []) => {
     await flushSave();
-    openProjectData(await projectsApi.create(name, payload));
+    const created = await projectsApi.create(name, payload);
+    // Pictures, programs, databases of the imported folder go into the new project as they are
+    const failed: string[] = [];
+    for (const b of binaries) {
+      try {
+        await uploadBinary(created.id, b.name, b.data);
+      } catch {
+        failed.push(b.name);
+      }
+    }
+    openProjectData(created);
+    if (failed.length) addLog({ id: generateId(), type: 'error', message: t('projects.skipped', { files: failed.join(', ') }), timestamp: getTimestamp() });
   };
 
   const handleProjectRenamed = (id: string, name: string) => {

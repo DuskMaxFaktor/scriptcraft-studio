@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Info, X, RefreshCw, Download, ExternalLink, Loader2, CheckCircle2, Copy, Save, FolderOpen, MessageSquareWarning } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
-import { checkForUpdates, useUpdateInfo } from '../updates.ts';
+import { checkForUpdates, updateError, useUpdateInfo } from '../updates.ts';
 import { askConfirm } from '../dialogs.tsx';
 
 // "About ScriptCraft Studio": version and updates, reporting a problem.
@@ -83,7 +83,7 @@ export const AboutModal: React.FC<{ isOpen: boolean; onClose: () => void; initia
     try {
       const res = await fetch('/api/update/install', { method: 'POST' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(updateError(data, 'Update failed'));
       setInstalling(true);
     } catch (e: any) {
       setError(e.message);

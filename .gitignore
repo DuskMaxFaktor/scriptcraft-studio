@@ -10,7 +10,7 @@ studio.log
 projects/
 settings.json
 build-cache/
-portable/
+/portable/
 runtime/
 test-results/
 playwright-report/

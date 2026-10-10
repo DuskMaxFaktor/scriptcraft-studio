@@ -1,7 +1,7 @@
 {
   "name": "scriptcraft-studio",
   "private": true,
-  "version": "1.2.1",
+  "version": "1.2.3",
   "license": "MIT",
   "repository": "github:DuskMaxFaktor/scriptcraft-studio",
   "type": "module",
@@ -64,7 +64,8 @@
     "vite": "^8.3.0"
   },
   "overrides": {
-    "dompurify": "^3.4.16"
+    "katex": "$katex",
+    "dompurify": "3.4.16"
   },
   "optionalDependencies": {
     "electron": "^44.5.1"

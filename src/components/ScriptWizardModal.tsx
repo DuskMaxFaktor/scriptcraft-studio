@@ -2,14 +2,7 @@ import React, { useState } from 'react';
 import { 
   Sparkles, 
   X, 
-  Code2, 
-  Terminal, 
-  FileCode, 
-  Database, 
-  Globe, 
-  Loader2,
-  CheckCircle2,
-  ArrowRight
+  Loader2
 } from 'lucide-react';
 import { FileLanguage } from '../types.ts';
 import { useI18n, getLang } from '../i18n.ts';

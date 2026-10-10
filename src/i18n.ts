@@ -246,6 +246,7 @@ const en = {
   'quick.none': 'No matching files',
 
   'hotkeys.title': 'Keyboard shortcuts',
+  'run.inputLost': 'The input was not delivered: the program has already finished.',
   'app.binariesImported': 'Added to the project folder ({count}): {files}',
   'risk.title': '«{name}» does something that is hard to undo or typical of malicious programs:',
   'risk.agentTitle': 'Careful: this code',
@@ -325,6 +326,7 @@ const en = {
   'about.installConfirm': 'Download and install version {version}? The studio will close and start again; projects, keys and settings stay.',
   'about.installing': 'The installer is running: the studio will close and start again in a minute.',
   'about.noInstaller': 'This release has no installer — download it from the release page.',
+  'about.offline': 'No connection to GitHub — check the internet and try again.',
   'about.portableHint': 'This copy was not installed with the installer: download the new version from the release page.',
   'about.releasePage': 'Release page',
   'hotkeys.run': 'Run the main file (or the open one)',
@@ -1189,6 +1191,7 @@ const ru: Record<Key, string> = {
   'quick.none': 'Файлы не найдены',
 
   'hotkeys.title': 'Горячие клавиши',
+  'run.inputLost': 'Ввод не доставлен: программа уже завершилась.',
   'app.binariesImported': 'Добавлено в папку проекта ({count}): {files}',
   'risk.title': '«{name}» делает то, что трудно отменить или что типично для вредоносных программ:',
   'risk.agentTitle': 'Осторожно: этот код',
@@ -1268,6 +1271,7 @@ const ru: Record<Key, string> = {
   'about.installConfirm': 'Скачать и установить версию {version}? Студия закроется и запустится снова; проекты, ключи и настройки останутся.',
   'about.installing': 'Установщик работает: студия закроется и через минуту запустится снова.',
   'about.noInstaller': 'В этом релизе нет установщика — скачайте со страницы релиза.',
+  'about.offline': 'Нет связи с GitHub — проверьте интернет и попробуйте ещё раз.',
   'about.portableHint': 'Эта копия не установлена установщиком: скачайте новую версию со страницы релиза.',
   'about.releasePage': 'Страница релиза',
   'hotkeys.run': 'Запустить главный (или открытый) файл',

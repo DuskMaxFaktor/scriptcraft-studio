@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { t } from './i18n.ts';
 
 // Update check result shared by the header badge and the "About" window.
 // On start the studio checks at most once a day (when a repository is set and auto-check is on).
@@ -29,11 +30,16 @@ export function useUpdateInfo(): UpdateInfo | null {
   );
 }
 
+/** The server's error as the user should read it: "offline" in the studio's language. */
+export function updateError(data: { error?: string; code?: string }, fallback: string): string {
+  return data.code === 'offline' ? t('about.offline') : data.error || fallback;
+}
+
 /** Ask the server to look at the latest release; throws with the server's message. */
 export async function checkForUpdates(): Promise<UpdateInfo> {
   const res = await fetch('/api/update/check', { method: 'POST' });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Update check failed');
+  if (!res.ok) throw new Error(updateError(data, 'Update check failed'));
   info = data;
   emit();
   return data;

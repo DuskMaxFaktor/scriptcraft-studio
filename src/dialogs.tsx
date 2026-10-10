@@ -39,6 +39,7 @@ export const DialogHost: React.FC = () => {
   const [, setTick] = useState(0);
   const [value, setValue] = useState('');
   const okRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -59,7 +60,11 @@ export const DialogHost: React.FC = () => {
         inputRef.current?.focus();
         inputRef.current?.select();
       }, 0);
-    } else setTimeout(() => okRef.current?.focus(), 0);
+    } else {
+      // Deleting, running risky code...: Enter must not confirm before the warning is read
+      const safe = current.kind === 'confirm' && current.danger ? cancelRef : okRef;
+      setTimeout(() => safe.current?.focus(), 0);
+    }
   }, [current]);
 
   if (!current) return null;
@@ -83,7 +88,7 @@ export const DialogHost: React.FC = () => {
         if (e.key === 'Escape') {
           e.stopPropagation();
           close(false);
-        } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
+        } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement) && !(current.kind === 'confirm' && current.danger)) {
           e.preventDefault();
           close(true);
         }
@@ -116,6 +121,7 @@ export const DialogHost: React.FC = () => {
         <div className="px-5 py-3 bg-modal border-t border-slate-800 flex justify-end gap-2">
           {current.kind !== 'alert' && (
             <button
+              ref={cancelRef}
               onClick={() => close(false)}
               data-dialog-cancel
               className="px-3 py-1.5 rounded-md border border-slate-700 text-slate-300 hover:bg-hover text-xs"

@@ -1,4 +1,4 @@
-import { FileItem, LogEntry, TableData } from '../types.ts';
+import { LogEntry, TableData } from '../types.ts';
 import { t } from '../i18n.ts';
 import type { Database, SqlJsStatic } from 'sql.js';
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';

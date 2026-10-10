@@ -428,6 +428,7 @@ export const NotebookView: React.FC<Props> = ({ content, fileName = 'notebook.ip
   async function exportHtml() {
     setExportMenu(false);
     setExporting(true);
+    try {
     // The hidden copy below renders every markdown cell (also the ones being edited); wait for diagrams
     const started = Date.now();
     for (;;) {
@@ -453,7 +454,9 @@ export const NotebookView: React.FC<Props> = ({ content, fileName = 'notebook.ip
     const holder = document.createElement('div');
     holder.innerHTML = NB_CSS + body;
     download(`${baseName}.html`, previewToHtml(holder, baseName), 'text/html;charset=utf-8');
-    setExporting(false);
+    } finally {
+      setExporting(false); // never leave the spinner (and the hidden copy) behind after an error
+    }
   }
 
   async function interruptKernel() {

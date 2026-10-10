@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import net from 'net';
 import path from 'path';
-import fs from 'fs';
 import { pathToFileURL, fileURLToPath } from 'url';
 import { prepareRun, attachPackages, cleanup, spawnCommand, startSession, type ProjectFileInput } from './run.ts';
 
@@ -319,7 +318,12 @@ debugRouter.post('/start', async (req, res) => {
   if (typeof code !== 'string' || !Array.isArray(files) || typeof entry !== 'string') {
     return res.status(400).json({ error: 'code, files and entry are required' });
   }
-  const prepared = prepareRun(lang, code, files as ProjectFileInput[], entry, typeof projectId === 'string' ? projectId : undefined);
+  let prepared: ReturnType<typeof prepareRun>;
+  try {
+    prepared = prepareRun(lang, code, files as ProjectFileInput[], entry, typeof projectId === 'string' ? projectId : undefined);
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || 'Cannot prepare the project for debugging' });
+  }
   if (!prepared?.rootDir) return res.status(400).json({ error: 'Cannot prepare the project for debugging' });
 
   const bps = normalizeBreakpoints(breakpoints);

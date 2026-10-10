@@ -55,6 +55,8 @@ const stamp = (d = new Date()) => {
 };
 
 let running: Promise<{ file: string; projects: number }> | null = null;
+/** Files bigger than this go into the archive as streams */
+const STREAM_FROM = 8 * 1024 * 1024;
 
 /** Zip every project now (one backup at a time) and drop the oldest beyond the limit. */
 export function createBackup(): Promise<{ file: string; projects: number }> {
@@ -81,7 +83,9 @@ export function createBackup(): Promise<{ file: string; projects: number }> {
             if (e.isDirectory()) walk(p, r);
             else if (e.isFile()) {
               try {
-                zip.file(r, fs.readFileSync(p), { date: fs.statSync(p).mtime });
+                const st = fs.statSync(p);
+                // Big files (uploaded programs, videos) are read while the archive is written, not all at once
+                zip.file(r, st.size > STREAM_FROM ? fs.createReadStream(p) : fs.readFileSync(p), { date: st.mtime });
               } catch {
                 // a file locked right now: the next backup gets it
               }
@@ -101,13 +105,22 @@ export function createBackup(): Promise<{ file: string; projects: number }> {
       file = `scriptcraft-backup-${stamp()}.zip`;
     }
     const tmp = path.join(dir, `${file}.part`);
-    await new Promise<void>((resolve, reject) => {
-      zip
-        .generateNodeStream({ type: 'nodebuffer', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } })
-        .pipe(fs.createWriteStream(tmp))
-        .on('finish', () => resolve())
-        .on('error', reject);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        // Errors of both ends are handled: a failing archive must not crash the studio from the scheduler
+        const source = zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 6 } });
+        const target = fs.createWriteStream(tmp);
+        source.on('error', (e: Error) => {
+          target.destroy();
+          reject(e);
+        });
+        target.on('error', reject).on('finish', () => resolve());
+        source.pipe(target);
+      });
+    } catch (err) {
+      fs.rmSync(tmp, { force: true });
+      throw err;
+    }
     fs.renameSync(tmp, path.join(dir, file));
     // Keep the newest N
     const keep = readSettings().backups.keep;
