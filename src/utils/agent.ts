@@ -3,33 +3,26 @@ import { detectLanguageFromName } from './presets.ts';
 import { executeSQL } from './execution.ts';
 import { getLang, t } from '../i18n.ts';
 import { findRisks, type Risk } from './codeSafety.ts';
+import {
+  buildProjectContext,
+  compactAgentConvo,
+  formatRunFailureHint,
+  pickEntryToRun,
+  PROJECT_RESYNC_EVERY,
+  stallContinueMessage,
+  type AgentConvoMessage,
+  type AgentFile,
+} from './agentContext.ts';
 
-export interface AgentFile {
-  name: string;
-  content: string;
-}
-
-const MAX_CONTEXT_CHARS = 150_000;
-const MAX_FILE_CHARS = 40_000;
-
-/** Project tree + file contents for the AI, trimmed to a sane size. */
-export function buildProjectContext(files: AgentFile[]): string {
-  if (files.length === 0) return 'The project is empty (no files yet).';
-  const tree = files.map((f) => `- ${f.name} (${f.content.split('\n').length} lines)`).join('\n');
-  let out = `Project files:\n${tree}\n`;
-  for (const f of files) {
-    const lang = detectLanguageFromName(f.name);
-    const body =
-      f.content.length > MAX_FILE_CHARS ? f.content.slice(0, MAX_FILE_CHARS) + '\n... [file truncated]' : f.content;
-    const block = `\n=== ${f.name} ===\n\`\`\`${lang}\n${body}\n\`\`\`\n`;
-    if (out.length + block.length > MAX_CONTEXT_CHARS) {
-      out += `\n[Other files omitted: the project is too large to include completely]\n`;
-      break;
-    }
-    out += block;
-  }
-  return out;
-}
+export type { AgentConvoMessage, AgentFile };
+export {
+  buildProjectContext,
+  compactAgentConvo,
+  formatRunFailureHint,
+  pickEntryToRun,
+  stallContinueMessage,
+  summarizeAgentStepJson,
+} from './agentContext.ts';
 
 export interface RunReport {
   ok: boolean;
@@ -302,6 +295,7 @@ export async function planAgent(opts: {
   projectId?: string | null;
   signal: AbortSignal;
   revise?: { plan: AgentPlan; feedback: string };
+  temperature?: number;
 }): Promise<{ plan: AgentPlan; model: string; notice: string | null }> {
   const messages: { role: 'user' | 'model'; text: string }[] = [
     { role: 'user', text: `Task from the user:\n${opts.task}\n\n${buildProjectContext(opts.files)}\n\n${await describePackages(opts.projectId)}` },
@@ -313,7 +307,7 @@ export async function planAgent(opts: {
   const res = await fetch('/api/agent/plan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, model: opts.model, lang: getLang() }),
+    body: JSON.stringify({ messages, model: opts.model, lang: getLang(), temperature: opts.temperature }),
     signal: opts.signal,
   });
   const data = await res.json().catch(() => ({}));
@@ -374,6 +368,7 @@ export async function runAgent(opts: {
   maxSteps?: number | null;
   /** A plan the user approved: the agent follows it and reports which step it works on */
   plan?: AgentPlan;
+  temperature?: number;
 }): Promise<void> {
   let approveAll = !opts.confirm;
   const ask = async (req: AgentApprovalRequest): Promise<boolean> => {
@@ -384,7 +379,8 @@ export async function runAgent(opts: {
   };
   let files = opts.files.map((f) => ({ ...f }));
   const maxSteps = opts.maxSteps === undefined ? AGENT_MAX_STEPS : opts.maxSteps || Infinity;
-  const convo: { role: 'user' | 'model'; text: string }[] = [
+  const packagesNote = await describePackages(opts.projectId);
+  const convo: AgentConvoMessage[] = [
     {
       role: 'user',
       text:
@@ -394,20 +390,48 @@ export async function runAgent(opts: {
             opts.plan.steps.map((s, i) => `${i + 1}. ${s.title}${s.files.length ? ` (files: ${s.files.join(', ')})` : ''}`).join('\n') +
             '\n\n'
           : '') +
-        `${buildProjectContext(files)}\n\n${await describePackages(opts.projectId)}`,
+        `${buildProjectContext(files)}\n\n${packagesNote}`,
     },
   ];
   let steps = 0;
+  /** Steps in a row with no file/run/install/external progress (local models love this). */
+  let idleSteps = 0;
+  let hadSuccessfulRun = false;
 
   try {
     while (steps < maxSteps) {
       if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
       steps++;
 
+      // Local models (and long Gemini runs) choke when every past step still carries full file bodies.
+      if (steps > 1) {
+        const compacted = compactAgentConvo(convo);
+        convo.splice(0, convo.length, ...compacted);
+        if ((steps - 1) % PROJECT_RESYNC_EVERY === 0) {
+          const entry = pickEntryToRun(files);
+          const resyncHint =
+            entry && !hadSuccessfulRun
+              ? `\n\nNext: set run="${entry}" to verify (do not idle).`
+              : '\n\nContinue the task.';
+          convo.push({
+            role: 'user',
+            text:
+              `Current project state (authoritative; prefer this over older file bodies in the history):\n` +
+              `${buildProjectContext(files)}\n\n${packagesNote}` +
+              resyncHint,
+          });
+        }
+      }
+
       const res = await fetch('/api/agent/step', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: convo, model: opts.model, lang: getLang() }),
+        body: JSON.stringify({
+          messages: convo,
+          model: opts.model,
+          lang: getLang(),
+          temperature: opts.temperature,
+        }),
         signal: opts.signal,
       });
       const data: AgentStepResponse & { error?: string } = await res.json().catch(() => ({}) as any);
@@ -426,7 +450,8 @@ export async function runAgent(opts: {
 
       // File changes, renames and deletes: shown to the user first (unless everything is allowed), then applied
       const moves = checkMoves(files, step.delete || [], step.rename || []);
-      if (step.files.length > 0 || moves.deletes.length > 0 || moves.renames.length > 0) {
+      const wroteFiles = step.files.length > 0 || moves.deletes.length > 0 || moves.renames.length > 0;
+      if (wroteFiles) {
         const moved = applyMoves(files, moves.deletes, moves.renames);
         const changes = step.files.map((ch) => ({
           path: ch.path,
@@ -452,6 +477,7 @@ export async function runAgent(opts: {
 
       // Outside the project: always asked, even after "allow all"
       const askExternal = async (req: AgentApprovalRequest) => !!opts.confirmExternal && (await opts.confirmExternal(req)) !== 'no';
+      let didExternal = false;
       if (step.readExternal?.length) {
         if (!(await askExternal({ kind: 'external-read', paths: step.readExternal }))) {
           return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
@@ -460,6 +486,7 @@ export async function runAgent(opts: {
         const results = await readExternal(step.readExternal, opts.signal);
         opts.onEvent({ kind: 'external-read', results });
         convo.push({ role: 'user', text: `Files outside the project you asked for:\n\n${clip(describeExternalReads(results), 60_000)}` });
+        didExternal = true;
       }
       if (step.writeExternal?.length) {
         // The current content, so the user sees exactly what changes
@@ -480,9 +507,11 @@ export async function runAgent(opts: {
             'Files outside the project:\n' +
             results.map((r) => (r.ok ? `${r.path}: ${r.created ? 'created' : 'overwritten'}` : `${r.path}: NOT written — ${r.error}`)).join('\n'),
         });
+        didExternal = true;
       }
 
       // Package installs: the user approves, then pip/npm run into the project's own packages folder
+      let didInstall = false;
       if (step.install && (step.install.python.length || step.install.node.length)) {
         const { python, node } = step.install;
         if (!opts.projectId) {
@@ -500,12 +529,37 @@ export async function runAgent(opts: {
               `${clip(result.output, 1500)}\n\n` +
               (result.ok ? 'The packages are now available. Continue.' : 'Do not rely on these packages; adjust your approach and continue.'),
           });
+          didInstall = true;
         }
       }
 
+      const madeProgress = wroteFiles || !!step.run || didExternal || didInstall;
+      idleSteps = madeProgress ? 0 : idleSteps + 1;
+
       if (!step.run) {
-        if (step.done) return opts.onEvent({ kind: 'finished', reason: 'done', steps });
-        convo.push({ role: 'user', text: 'Continue with the next step.' });
+        // Refuse early done=true when an entry exists but was never verified by a successful run
+        if (step.done) {
+          const entry = pickEntryToRun(files);
+          if (entry && !hadSuccessfulRun) {
+            convo.push({
+              role: 'user',
+              text:
+                `Not done yet: you have never successfully run the program. Set run="${entry}" now. ` +
+                `After exit code 0, answer with done=true and run=null.`,
+            });
+            continue;
+          }
+          return opts.onEvent({ kind: 'finished', reason: 'done', steps });
+        }
+        convo.push({
+          role: 'user',
+          text: stallContinueMessage({
+            files,
+            idleSteps,
+            wroteFilesThisStep: wroteFiles,
+            hadSuccessfulRun,
+          }),
+        });
         continue;
       }
 
@@ -518,16 +572,18 @@ export async function runAgent(opts: {
       if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
       const report = await runProjectFile(step.run, files, opts.signal, opts.projectId);
       opts.onEvent({ kind: 'run', path: step.run, report });
+      if (report.ok) hadSuccessfulRun = true;
+      idleSteps = 0;
 
       // Finished and verified by a successful run: no need to spend another request
       if (step.done && report.ok) return opts.onEvent({ kind: 'finished', reason: 'done', steps });
       convo.push({
         role: 'user',
         text:
-          `Result of running ${step.run}: exit code ${report.exitCode ?? 'n/a'}${report.ok ? ' (success)' : ' (FAILED)'}\n${report.output}\n\n` +
+          `Result of running ${step.run}: exit code ${report.exitCode ?? 'n/a'}${report.ok ? ' (success)' : ' (FAILED)'}\n${report.output}` +
           (report.ok
-            ? 'If the output shows the task is complete, answer with done=true and run=null. Otherwise continue.'
-            : 'Fix the problem and run again.'),
+            ? '\n\nIf the output shows the task is complete, answer with done=true and run=null. Otherwise continue.'
+            : `\n\nFix the problem and run again.${formatRunFailureHint(report.output)}`),
       });
     }
     opts.onEvent({ kind: 'finished', reason: 'max-steps', steps });

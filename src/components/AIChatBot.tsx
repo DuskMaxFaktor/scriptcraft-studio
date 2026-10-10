@@ -43,6 +43,7 @@ import {
 } from '../utils/agent.ts';
 import { lazyNamed } from '../utils/lazy.tsx';
 import { extractCodeFiles, namedFiles } from '../utils/codeFiles.ts';
+import { AGENT_TEMP, CHAT_TEMP, TEMP_PRESETS, chatSystemInstruction, type TempPreset } from '../utils/aiPrefs.ts';
 import { AgentPlanCard } from './AgentPlanCard.tsx';
 import { askConfirm } from '../dialogs.tsx';
 
@@ -174,26 +175,44 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     Number(readPref('scriptcraft-agent-steps', AGENT_STEP_CHOICES.map(String), String(AGENT_STEP_CHOICES[0])))
   );
   useEffect(() => writePref('scriptcraft-agent-steps', String(agentSteps)), [agentSteps]);
+  const [chatTemp, setChatTemp] = useState<TempPreset>(() =>
+    readPref('scriptcraft-chat-temp', TEMP_PRESETS, 'balanced')
+  );
+  useEffect(() => writePref('scriptcraft-chat-temp', chatTemp), [chatTemp]);
+  const [agentTemp, setAgentTemp] = useState<TempPreset>(() =>
+    readPref('scriptcraft-agent-temp', TEMP_PRESETS, 'balanced')
+  );
+  useEffect(() => writePref('scriptcraft-agent-temp', agentTemp), [agentTemp]);
   const [selectedRole, setSelectedRole] = useState<AIRole>(AI_ROLES[0]);
-  const { models, selected: selectedModel, setSelectedModel } = useModels();
+  const {
+    models,
+    selected: selectedModel,
+    setSelectedModel,
+    selectedAgent: selectedAgentModel,
+    agentFollowsChat,
+    agentIsAuto,
+    setSelectedAgentModel,
+  } = useModels();
   const [contextMode, setContextMode] = useState<ContextMode>(() =>
     readPref('scriptcraft-chat-context', ['none', 'file', 'project'] as const, 'file')
   );
   const [agentMode, setAgentMode] = useState(() => readPref('scriptcraft-agent-mode', ['on', 'off'] as const, 'off') === 'on');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showRoleMenu, setShowRoleMenu] = useState(false);
+  const [showAgentModelMenu, setShowAgentModelMenu] = useState(false);
   const selectorBarRef = useRef<HTMLDivElement>(null);
-  // A click anywhere else closes the model / role menus
+  // A click anywhere else closes the model / role / agent-model menus
   useEffect(() => {
-    if (!showRoleMenu && !showModelMenu) return;
+    if (!showRoleMenu && !showModelMenu && !showAgentModelMenu) return;
     const onDown = (e: MouseEvent) => {
       if (selectorBarRef.current?.contains(e.target as Node)) return;
       setShowRoleMenu(false);
       setShowModelMenu(false);
+      setShowAgentModelMenu(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [showRoleMenu, showModelMenu]);
+  }, [showRoleMenu, showModelMenu, showAgentModelMenu]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -300,7 +319,14 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     if (planFirst) {
       setAgentStatus(t('plan.making'));
       try {
-        let current = await planAgent({ task, files: filesFromItems(filesRef.current), model: selectedModel.id, projectId, signal: controller.signal });
+        let current = await planAgent({
+          task,
+          files: filesFromItems(filesRef.current),
+          model: selectedAgentModel.id,
+          projectId,
+          signal: controller.signal,
+          temperature: AGENT_TEMP[agentTemp],
+        });
         for (;;) {
           setAgentStatus(t('plan.waiting'));
           const decision = await new Promise<{ kind: 'run' } | { kind: 'revise'; feedback: string } | { kind: 'cancel' }>((resolve) =>
@@ -324,9 +350,10 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
           current = await planAgent({
             task,
             files: filesFromItems(filesRef.current),
-            model: selectedModel.id,
+            model: selectedAgentModel.id,
             projectId,
             signal: controller.signal,
+            temperature: AGENT_TEMP[agentTemp],
             revise: { plan: current.plan, feedback: decision.feedback },
           });
         }
@@ -353,7 +380,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
     await runAgent({
       task,
       files: filesFromItems(filesRef.current),
-      model: selectedModel.id,
+      model: selectedAgentModel.id,
       projectId,
       signal: controller.signal,
       applyFiles: onApplyFiles,
@@ -361,6 +388,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
       // Files outside the project: asked every time, even with approvals off
       confirmExternal: (req) => askApproval(req, controller.signal),
       maxSteps: agentSteps,
+      temperature: AGENT_TEMP[agentTemp],
       plan,
       onEvent: (e) => {
         if (e.kind === 'step') {
@@ -532,7 +560,10 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
         body: JSON.stringify({
           messages: payloadMessages,
           model: selectedModel.id,
-          systemInstruction: selectedRole.systemInstruction + aiLanguageInstruction(),
+          systemInstruction:
+            chatSystemInstruction(selectedRole.id, selectedRole.systemInstruction, selectedModel.provider) +
+            aiLanguageInstruction(),
+          temperature: CHAT_TEMP[chatTemp],
           lang: getLang(),
         }),
         signal: controller.signal,
@@ -675,6 +706,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
             onClick={() => {
               setShowModelMenu(!showModelMenu);
               setShowRoleMenu(false);
+              setShowAgentModelMenu(false);
             }}
             className="w-full flex items-center justify-between px-2 py-1 bg-panel hover:bg-active border border-slate-700/80 rounded text-[11px] text-slate-200 transition-colors"
           >
@@ -744,20 +776,97 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
           )}
         </div>
 
-        {/* Role Selector */}
+        {/* Role (chat) or agent model (agent mode — roles are ignored by the agent) */}
         <div className="flex-1 min-w-0">
           <button
             onClick={() => {
-              setShowRoleMenu(!showRoleMenu);
+              if (agentMode) {
+                setShowAgentModelMenu(!showAgentModelMenu);
+                setShowRoleMenu(false);
+              } else {
+                setShowRoleMenu(!showRoleMenu);
+                setShowAgentModelMenu(false);
+              }
               setShowModelMenu(false);
             }}
             className="w-full flex items-center justify-between px-2 py-1 bg-panel hover:bg-active border border-slate-700/80 rounded text-[11px] text-slate-200 transition-colors"
+            title={agentMode ? t('agent.selectModelTitle') : undefined}
           >
-            <span className="truncate font-medium">{t(`role.${selectedRole.id}`)}</span>
+            <span className="truncate font-medium">
+              {agentMode
+                ? agentFollowsChat
+                  ? t('agent.modelSame', { model: selectedModel.name })
+                  : agentIsAuto
+                    ? t('agent.modelAuto', { model: selectedAgentModel.name })
+                    : selectedAgentModel.name
+                : t(`role.${selectedRole.id}`)}
+            </span>
             <ChevronDown className="w-3 h-3 text-slate-400 shrink-0 ml-1" />
           </button>
 
-          {showRoleMenu && (
+          {agentMode && showAgentModelMenu && (
+            <div className="absolute left-3 right-3 top-full -mt-1 max-h-[60vh] overflow-y-auto bg-panel border border-slate-700 rounded-md shadow-2xl py-1 z-40 text-xs">
+              <div className="px-2.5 py-1 text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+                {t('agent.selectModel')}
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedAgentModel('auto');
+                  setShowAgentModelMenu(false);
+                }}
+                className={`w-full text-left px-2.5 py-1.5 hover:bg-slate-800 ${
+                  agentIsAuto ? 'bg-indigo-950/40 text-indigo-200' : 'text-slate-300'
+                }`}
+              >
+                <span className="font-medium text-xs">{t('agent.modelAuto', { model: selectedAgentModel.name })}</span>
+                <span className="block text-[10px] text-slate-500 mt-0.5">{t('agent.modelAutoHint')}</span>
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedAgentModel(null);
+                  setShowAgentModelMenu(false);
+                }}
+                className={`w-full text-left px-2.5 py-1.5 hover:bg-slate-800 ${
+                  agentFollowsChat ? 'bg-indigo-950/40 text-indigo-200' : 'text-slate-300'
+                }`}
+              >
+                <span className="font-medium text-xs">{t('agent.modelSame', { model: selectedModel.name })}</span>
+              </button>
+              {(
+                [
+                  ['gemini', 'Google Gemini'],
+                  ['ollama', t('ai.groupOllama')],
+                  ['custom', t('ai.groupCustom')],
+                ] as const
+              ).map(([provider, label]) => {
+                const group = models.filter((m) => m.provider === provider);
+                if (group.length === 0) return null;
+                return (
+                  <div key={provider}>
+                    <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] font-semibold text-slate-500">{label}</div>
+                    {group.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => {
+                          setSelectedAgentModel(model.id);
+                          setShowAgentModelMenu(false);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 hover:bg-slate-800 flex flex-col gap-0.5 ${
+                          !agentFollowsChat && !agentIsAuto && selectedAgentModel.id === model.id
+                            ? 'bg-indigo-950/40 text-indigo-200'
+                            : 'text-slate-300'
+                        }`}
+                      >
+                        <span className="font-medium text-xs text-fg truncate">{model.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {!agentMode && showRoleMenu && (
             <div className="absolute left-3 right-3 top-full -mt-1 max-h-[60vh] overflow-y-auto bg-panel border border-slate-700 rounded-md shadow-2xl py-1 z-40 text-xs">
               <div className="px-2.5 py-1 text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
                 {t('chat.selectRole')}
@@ -834,7 +943,7 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
         {(waitingForFirstToken || agentStatus) && !approval && (
           <div className="flex items-center gap-2 p-2 text-xs text-indigo-400 bg-indigo-950/20 border border-indigo-800/30 rounded-lg">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            <span>{agentStatus || t('chat.thinking', { model: selectedModel.name })}</span>
+            <span>{agentStatus || t('chat.thinking', { model: agentMode ? selectedAgentModel.name : selectedModel.name })}</span>
           </div>
         )}
 
@@ -897,6 +1006,22 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
                   ))}
                 </select>
               </label>
+              <label className="flex items-center gap-1 text-slate-300" title={t('chat.tempTitle')}>
+                {t('chat.temp')}
+                <select
+                  value={agentTemp}
+                  onChange={(e) => setAgentTemp(e.target.value as TempPreset)}
+                  disabled={isLoading}
+                  className="bg-panel border border-slate-700 rounded px-0.5 text-[11px] text-fg"
+                  data-agent-temp
+                >
+                  {TEMP_PRESETS.map((p) => (
+                    <option key={p} value={p}>
+                      {t(`chat.temp.${p}`)}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
           </div>
         ) : (
@@ -921,6 +1046,22 @@ export const AIChatBot: React.FC<AIChatBotProps> = ({
                 </button>
               ))}
             </div>
+            <label className="flex items-center gap-1 shrink-0 text-slate-300" title={t('chat.tempTitle')}>
+              {t('chat.temp')}
+              <select
+                value={chatTemp}
+                onChange={(e) => setChatTemp(e.target.value as TempPreset)}
+                disabled={isLoading}
+                className="bg-panel border border-slate-700 rounded px-0.5 text-[11px] text-fg"
+                data-chat-temp
+              >
+                {TEMP_PRESETS.map((p) => (
+                  <option key={p} value={p}>
+                    {t(`chat.temp.${p}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <span className="truncate text-[10px] font-mono text-slate-500">
               {contextMode === 'file' && activeFile
                 ? activeFile.name

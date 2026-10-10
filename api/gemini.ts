@@ -376,6 +376,26 @@ Files outside the project: the studio's own folder, .env files, Windows and Prog
 Keep the number of steps small. Do not rewrite files that do not need changes.
 If the task comes with an approved plan, follow it in order and set "planStep" to the number of the plan step this answer works on (otherwise null).`;
 
+/** Short system prompt for local Ollama models (long English + schema duplication hurts 7–14B models). */
+const AGENT_SYSTEM_LOCAL = `You are a coding agent in ScriptCraft Studio on the user's PC. Reply with ONE JSON object only (schema enforced):
+- message: short note for the user
+- files: at most 2 project files to create/overwrite, each with COMPLETE content (never "..."); [] if none
+- run: entry file to execute now (e.g. main.py), or null only while you still must write more code first
+- install: {"python":["pkg"],"node":["pkg"]} or null — user approves; prefer the standard library
+- delete: project paths to delete, or []
+- rename: [{"from":"a","to":"b"}], or []
+- readExternal / writeExternal: full paths outside the project (user approves each time), or []
+- done: true ONLY after a successful run verified the task (never done=true with run=null if main/entry was never run)
+- planStep: 1-based plan step number, or null
+
+Rules:
+- One small step at a time; do not rewrite unchanged files.
+- As soon as main.py / app.py / index.js (or the task's entry) exists, set run to that file — do not idle with empty files[].
+- Runs are non-interactive (20s, no stdin); demos must print sample output themselves.
+- Syntax: no unexpected indent at top level; keep string literals on one line; in f-strings use f"... {d['k']} ...".
+- After a failed run, rewrite the broken file completely and run again.
+- Follow an approved plan in order.`;
+
 const AGENT_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -442,26 +462,38 @@ export async function handleAgentStep(params: {
   model?: string;
   lang?: UiLang;
   languageInstruction?: string;
+  /** Sampling temperature override (Ollama default 0.15, other external 0.3, Gemini 0.4). */
+  temperature?: number;
 }): Promise<{ step: AgentStep; notice: string | null; model: string }> {
   const { messages } = params;
   if (!messages || messages.length === 0) throw new Error('Messages list cannot be empty');
   const lang: UiLang = params.lang === 'en' ? 'en' : 'ru';
   const preferred = params.model || 'gemini-3.5-flash';
+  const localOllama = preferred.startsWith('ollama:');
+  const baseSystem = localOllama ? AGENT_SYSTEM_LOCAL : AGENT_SYSTEM;
   const agentSystem =
-    AGENT_SYSTEM +
+    baseSystem +
     (lang === 'ru' ? '\nWrite the "message" field in Russian (code and code comments stay in English).' : '') +
     (params.languageInstruction || '');
+  const extTemp = params.temperature ?? (localOllama ? 0.15 : 0.3);
+  const geminiTemp = params.temperature ?? 0.4;
 
   let r: { text: string; model: string; notice: string | null };
   if (isExternalModel(preferred)) {
-    const l = withReplyLanguage(
-      agentSystem +
-        '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "install": {"python": string[], "node": string[]} or null, "delete": string[], "rename": [{"from": string, "to": string}], "readExternal": string[], "writeExternal": [{"path": string, "content": string}], "done": boolean, "planStep": number or null}.',
-      toLlmMessages(messages),
-      lang,
-      true
-    );
-    const json = await externalJson(preferred, l.system, l.messages, { schema: toJsonSchema(AGENT_SCHEMA), maxTokens: 12000 });
+    const formHint = localOllama
+      ? '\nAnswer ONLY with one JSON object. At most 2 entries in "files" per step.'
+      : '\nAnswer ONLY with one JSON object of the form {"message": string, "files": [{"path": string, "content": string}], "run": string or null, "install": {"python": string[], "node": string[]} or null, "delete": string[], "rename": [{"from": string, "to": string}], "readExternal": string[], "writeExternal": [{"path": string, "content": string}], "done": boolean, "planStep": number or null}.';
+    const l = withReplyLanguage(agentSystem + formHint, toLlmMessages(messages), lang, true);
+    const schema = toJsonSchema(AGENT_SCHEMA);
+    if (localOllama) {
+      const filesProp = (schema.properties as Record<string, Record<string, unknown>> | undefined)?.files;
+      if (filesProp) filesProp.maxItems = 2;
+    }
+    const json = await externalJson(preferred, l.system, l.messages, {
+      schema,
+      maxTokens: 12000,
+      temperature: extTemp,
+    });
     r = { text: JSON.stringify(json), model: preferred, notice: null };
   } else r = await runWithFallbackRaw(preferred, lang, async (model, signal) => {
     const response = await getAI().models.generateContent({
@@ -471,7 +503,7 @@ export async function handleAgentStep(params: {
         systemInstruction: agentSystem,
         responseMimeType: 'application/json',
         responseSchema: AGENT_SCHEMA as any,
-        temperature: 0.4,
+        temperature: geminiTemp,
         abortSignal: signal,
       },
     });
@@ -561,22 +593,45 @@ export function normalizePlan(raw: any): AgentPlan {
   };
 }
 
-export async function handleAgentPlan(params: { messages: ChatMessage[]; model?: string; lang?: UiLang }): Promise<{ plan: AgentPlan; notice: string | null; model: string }> {
+const PLAN_SYSTEM_LOCAL = `You plan coding tasks for ScriptCraft Studio. Do NOT write code. Reply with ONE JSON object:
+- summary: 1–2 sentences what will be built/changed and how it is checked
+- steps: 2–7 items, each {"title": short sentence, "files": [paths]} — last step should verify by running when possible
+- questions: up to 3 unclear points that change the plan a lot, or []
+Runs are non-interactive (20s). Prefer the standard library.`;
+
+export async function handleAgentPlan(params: {
+  messages: ChatMessage[];
+  model?: string;
+  lang?: UiLang;
+  temperature?: number;
+}): Promise<{ plan: AgentPlan; notice: string | null; model: string }> {
   const { messages } = params;
   if (!messages || messages.length === 0) throw new Error('Messages list cannot be empty');
   const lang: UiLang = params.lang === 'en' ? 'en' : 'ru';
   const preferred = params.model || 'gemini-3.5-flash';
-  const system = PLAN_SYSTEM + (lang === 'ru' ? '\nWrite "summary", step titles and questions in Russian (file names stay as they are).' : '');
+  const localOllama = preferred.startsWith('ollama:');
+  const system =
+    (localOllama ? PLAN_SYSTEM_LOCAL : PLAN_SYSTEM) +
+    (lang === 'ru' ? '\nWrite "summary", step titles and questions in Russian (file names stay as they are).' : '');
+  const extTemp = params.temperature ?? (localOllama ? 0.15 : 0.3);
 
   let r: { text: string; model: string; notice: string | null };
   if (isExternalModel(preferred)) {
-    const l = withReplyLanguage(
-      system + '\nAnswer ONLY with one JSON object of the form {"summary": string, "steps": [{"title": string, "files": [string]}], "questions": [string]}.',
-      toLlmMessages(messages),
-      lang,
-      true
-    );
-    r = { text: JSON.stringify(await externalJson(preferred, l.system, l.messages, { schema: toJsonSchema(PLAN_SCHEMA), maxTokens: 2000 })), model: preferred, notice: null };
+    const formHint = localOllama
+      ? '\nAnswer ONLY with one JSON object.'
+      : '\nAnswer ONLY with one JSON object of the form {"summary": string, "steps": [{"title": string, "files": [string]}], "questions": [string]}.';
+    const l = withReplyLanguage(system + formHint, toLlmMessages(messages), lang, true);
+    r = {
+      text: JSON.stringify(
+        await externalJson(preferred, l.system, l.messages, {
+          schema: toJsonSchema(PLAN_SCHEMA),
+          maxTokens: 2000,
+          temperature: extTemp,
+        })
+      ),
+      model: preferred,
+      notice: null,
+    };
   } else
     r = await runWithFallbackRaw(preferred, lang, async (model, signal) => {
       const response = await getAI().models.generateContent({

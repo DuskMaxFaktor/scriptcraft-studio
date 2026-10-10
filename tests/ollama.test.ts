@@ -19,6 +19,8 @@ let lastMessages: { role: string; content: string }[] = [];
 let lastBody: any = null;
 /** Largest context the fake "machine" can hold (0: nothing fits) */
 let fits = 4096;
+/** When true, the next JSON reply is truncated once, then a valid short object. */
+let truncateOnce = false;
 let llm: typeof import('../api/llm.ts');
 
 before(async () => {
@@ -39,9 +41,13 @@ before(async () => {
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         res.write(JSON.stringify({ message: { content: 'При' }, done: false }) + '\n');
         res.end(JSON.stringify({ message: { content: 'вет' }, done: true }) + '\n');
+      } else if (j.format && truncateOnce) {
+        truncateOnce = false;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: { content: '{"message":"cut","files":[{"path":"a.py","content":"print(' }, done: true, done_reason: 'length' }));
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: { content: j.format ? '{"ok":true}' : `ctx=${ctx}` }, done: true }));
+        res.end(JSON.stringify({ message: { content: j.format ? '{"ok":true}' : `ctx=${ctx}` }, done: true, done_reason: 'stop' }));
       }
     });
   });
@@ -122,4 +128,38 @@ test('ollama: an attached image rides on the message (base64, for vision models)
   const last = lastMessages.at(-1) as { content: string; images?: string[] };
   assert.deepEqual(last.images, ['QUJD']); // base64 only, no mime / data: prefix
   assert.equal(last.content, 'what is this?');
+});
+
+test('ollama agent: short local system prompt, low temperature, files maxItems=2', async () => {
+  const gemini = await import(pathToFileURL(path.join(studioRoot, 'api', 'gemini.ts')).href);
+  await gemini.handleAgentStep({
+    model: 'ollama:nemo',
+    lang: 'en',
+    messages: [{ role: 'user', text: 'Create hello.py' }],
+  });
+  const sys = lastMessages[0].content;
+  assert.match(sys, /at most 2 project files/i);
+  assert.match(sys, /done:\s*true ONLY after a successful run/i);
+  assert.doesNotMatch(sys, /Windows PC/); // long Gemini prompt
+  assert.equal(lastBody.options.temperature, 0.15);
+  assert.equal(lastBody.format.properties.files.maxItems, 2);
+});
+
+test('ollama JSON: truncated reply retries with one-file nudge', async () => {
+  truncateOnce = true;
+  const schema = llm.toJsonSchema({
+    type: 'OBJECT',
+    properties: {
+      message: { type: 'STRING' },
+      files: { type: 'ARRAY', items: { type: 'OBJECT', properties: { path: { type: 'STRING' }, content: { type: 'STRING' } } } },
+      done: { type: 'BOOLEAN' },
+    },
+    required: ['message', 'files', 'done'],
+  });
+  (schema.properties as any).files.maxItems = 2;
+  const out = await llm.externalJson('ollama:nemo', 'sys', [{ role: 'user', text: 'json' }], { schema, maxTokens: 12000, temperature: 0.15 });
+  assert.deepEqual(out, { ok: true });
+  assert.match(lastMessages.at(-1)!.content, /cut off|ONE file/i);
+  assert.equal(lastBody.format.properties.files.maxItems, 1);
+  assert.ok(lastBody.options.num_predict <= 6000);
 });
