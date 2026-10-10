@@ -39,7 +39,7 @@ app.use(
   })
 );
 
-app.get('*', (req, res) => {
+app.get('*', (_req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(distPath, 'index.html'));
 });

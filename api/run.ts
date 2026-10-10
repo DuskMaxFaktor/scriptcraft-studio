@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { Router } from 'express';
+import { StringDecoder } from 'string_decoder';
 import { projectEnv, projectArgs } from './runconfig.ts';
 
 export interface RunResult {
@@ -66,6 +67,9 @@ export interface ProjectFileInput {
 
 const MAX_PROJECT_BYTES = 20 * 1024 * 1024;
 
+/** A run request that cannot be run as sent (reported to the user as a 400). */
+export class RunInputError extends Error {}
+
 /** Safe relative path inside the temp project folder, or null if the name tries to escape it. */
 function safeRelative(name: string): string | null {
   const parts = String(name).replace(/\\/g, '/').split('/').filter(Boolean);
@@ -118,7 +122,11 @@ export function prepareRun(language: string, code: string, files?: ProjectFileIn
       const rel = safeRelative(f?.name);
       if (!rel || typeof f.content !== 'string') continue;
       total += f.content.length;
-      if (total > MAX_PROJECT_BYTES) break;
+      if (total > MAX_PROJECT_BYTES) {
+        // Half a project would fail with a confusing "module not found": say what is wrong instead
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        throw new RunInputError(`The project is too big to run with unsaved changes (over ${MAX_PROJECT_BYTES / 1024 / 1024} MB): save it and run again`);
+      }
       const target = path.join(tempDir, rel);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, f.content, 'utf-8');
@@ -258,7 +266,12 @@ export async function executeCodeOnServer(
   projectId?: string
 ): Promise<RunResult> {
   const t0 = performance.now();
-  const prepared = prepareRun(language, code, files, entry, projectId);
+  let prepared: PreparedRun | null;
+  try {
+    prepared = prepareRun(language, code, files, entry, projectId);
+  } catch (err: any) {
+    return { success: false, stdout: '', stderr: err?.message || String(err), exitCode: 1, durationMs: 0 };
+  }
   if (!prepared) {
     return {
       success: false,
@@ -281,12 +294,15 @@ export async function executeCodeOnServer(
       killProcessTree(proc);
     }, timeoutMs);
 
-    proc.stdout?.on('data', (data) => {
-      stdout += data.toString('utf-8');
+    // One decoder per stream: a character split between two chunks is joined, not garbled
+    const outDec = new StringDecoder('utf8');
+    const errDec = new StringDecoder('utf8');
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += outDec.write(data);
       if (stdout.length > 500000) killProcessTree(proc);
     });
-    proc.stderr?.on('data', (data) => {
-      stderr += data.toString('utf-8');
+    proc.stderr?.on('data', (data: Buffer) => {
+      stderr += errDec.write(data);
       if (stderr.length > 500000) killProcessTree(proc);
     });
     proc.on('error', (err) => {
@@ -295,6 +311,8 @@ export async function executeCodeOnServer(
     proc.on('close', (code) => {
       clearTimeout(timer);
       cleanup(prepared);
+      stdout += outDec.end();
+      stderr += errDec.end();
       if (isTimedOut) stderr += `\n[Process timed out after ${timeoutMs / 1000}s]`;
       resolve({
         success: !isTimedOut && code === 0,
@@ -389,9 +407,12 @@ export function startSession(proc: ChildProcess, onClose?: () => void, maxRunMs 
   sessions.set(session.id, session);
 
   const timer = setTimeout(() => stopSession(session, 'timeout'), maxRunMs);
+  // One decoder per stream: a multi-byte character (Cyrillic...) split between two chunks stays whole
+  const decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8') };
   const onData = (type: 'stdout' | 'stderr') => (chunk: Buffer) => {
     session.outputBytes += chunk.length;
-    pushEvent(session, { type, data: chunk.toString('utf-8') });
+    const text = decoders[type].write(chunk);
+    if (text) pushEvent(session, { type, data: text });
     if (session.outputBytes > MAX_OUTPUT_BYTES) stopSession(session, 'output-limit');
   };
   proc.stdout?.on('data', onData('stdout'));
@@ -402,6 +423,10 @@ export function startSession(proc: ChildProcess, onClose?: () => void, maxRunMs 
   proc.on('error', (err) => pushEvent(session, { type: 'stderr', data: `Execution error: ${err.message}\n` }));
   proc.on('close', (code) => {
     clearTimeout(timer);
+    for (const type of ['stdout', 'stderr'] as const) {
+      const rest = decoders[type].end();
+      if (rest) pushEvent(session, { type, data: rest });
+    }
     onClose?.();
     session.done = true;
     pushEvent(session, {
@@ -420,7 +445,13 @@ runRouter.post('/start', (req, res) => {
   const { language, code, files, entry, projectId } = req.body || {};
   if (typeof code !== 'string' || !code) return res.status(400).json({ error: 'Code content is required' });
 
-  const prepared = prepareRun(String(language || 'python'), code, files, entry, typeof projectId === 'string' ? projectId : undefined);
+  let prepared: PreparedRun | null;
+  try {
+    prepared = prepareRun(String(language || 'python'), code, files, entry, typeof projectId === 'string' ? projectId : undefined);
+  } catch (err: any) {
+    if (err instanceof RunInputError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
   if (!prepared) return res.status(400).json({ error: `Language "${language}" cannot be run on the server` });
 
   const proc = spawnPrepared(prepared, typeof projectId === 'string' ? projectId : undefined);

@@ -109,6 +109,15 @@ test('update check: newer release found, a portable copy only gets the page', as
   assert.equal((await api('POST', '/api/update/check')).data.available, false);
 });
 
+test('download: a file that cannot be written fails the download, never the server', async () => {
+  const { download } = await import(pathToFileURL(path.join(studioRoot, 'api', 'update.ts')).href);
+  // The target is a folder: the write stream errors (like a full disk or a locked file would)
+  const target = path.join(tmp, 'a-folder');
+  fs.mkdirSync(target);
+  await assert.rejects(download(`${ghBase}/dl/setup.exe`, target), /Cannot save the download|Download failed/);
+  assert.ok(fs.statSync(target).isDirectory());
+});
+
 test('update install: downloads, verifies the checksum, refuses a mismatch and foreign hosts', async () => {
   process.env.SCRIPTCRAFT_UPDATE_INSTALLED = '1';
   release = { ...release, tag_name: 'v99.0.0' };

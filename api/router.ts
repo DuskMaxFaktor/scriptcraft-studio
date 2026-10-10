@@ -7,7 +7,7 @@ import { disasmRouter } from './disasm.ts';
 import { notebookRouter } from './notebook.ts';
 import { appsRouter } from './apps.ts';
 import { gitRouter } from './git.ts';
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -49,7 +49,7 @@ apiRouter.use('/backups', backupsRouter);
 apiRouter.use('/projects', projectsRouter);
 apiRouter.use('/run', runRouter);
 
-apiRouter.get('/health', (req, res) => {
+apiRouter.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), previewPort: getPreviewPort() });
 });
 
@@ -69,7 +69,7 @@ apiRouter.get('/about/:doc', (req, res) => {
 });
 
 // Gemini models + models of the user's own providers (installed Ollama models, custom server)
-apiRouter.get('/models', async (req, res) => {
+apiRouter.get('/models', async (_req, res) => {
   const external = await listExternalModels();
   res.json({
     models: [
@@ -234,7 +234,7 @@ apiRouter.post('/code-action', async (req, res) => {
 });
 
 // Download full project source zip with package.json and start_studio.bat
-apiRouter.get('/download-full-project', async (req, res) => {
+apiRouter.get('/download-full-project', async (_req, res) => {
   try {
     const zip = new JSZip();
     const rootDir = process.cwd();
@@ -266,4 +266,13 @@ apiRouter.get('/download-full-project', async (req, res) => {
     console.error('Download project failed:', err);
     res.status(500).json({ error: err.message || 'Failed to generate zip' });
   }
+});
+
+// Errors Express catches itself (a bad %-escape in a URL, malformed JSON...): a short JSON answer without
+// a stack trace; real server errors also go to the error journal
+apiRouter.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  const status = Number(err?.status || err?.statusCode) || 500;
+  if (status >= 500) console.error('API error:', err);
+  if (res.headersSent) return;
+  res.status(status).json({ error: status >= 500 ? 'Server error' : err?.message || 'Bad request' });
 });

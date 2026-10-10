@@ -68,6 +68,8 @@ function projectDir(id: string): string {
  * Reduce a user-supplied relative path ("src/utils/a.py") to a safe path inside the project folder.
  * Each segment is cleaned; "..", "." and empty segments are rejected so nothing can escape the folder.
  */
+const RESERVED_WIN_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
 function safeFilePath(name: unknown): string {
   const segments = String(name || '')
     .replace(/\\/g, '/')
@@ -79,6 +81,8 @@ function safeFilePath(name: unknown): string {
   const cleaned = segments.map((seg) => {
     const c = seg.replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 120);
     if (!c || c === '.' || c === '..') throw new HttpError(400, `Invalid file name: ${String(name)}`);
+    // Windows device names: "nul.py", "con.txt"... are not files there (the content would be lost)
+    if (RESERVED_WIN_NAME.test(c)) throw new HttpError(400, `"${c}" is a reserved name on Windows`);
     return c;
   });
   const rel = cleaned.join('/');
@@ -131,8 +135,23 @@ function readMeta(id: string): ProjectMeta {
   return JSON.parse(fs.readFileSync(file, 'utf-8'));
 }
 
+/** Written to a temporary file first, then renamed: a crash mid-write never leaves a half-written project file. */
 function writeMeta(meta: ProjectMeta) {
-  fs.writeFileSync(path.join(projectDir(meta.id), META_FILE), JSON.stringify(meta, null, 2), 'utf-8');
+  const dir = projectDir(meta.id);
+  const file = path.join(dir, META_FILE);
+  // The temporary file lives in the service folder .history: the folder watcher ignores it, so a save
+  // is never mistaken for a change made outside the studio
+  const tmpDir = path.join(dir, HISTORY_DIR);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const tmp = path.join(tmpDir, `.meta-${process.pid}.tmp`);
+  fs.writeFileSync(tmp, JSON.stringify(meta, null, 2), 'utf-8');
+  try {
+    fs.renameSync(tmp, file);
+  } catch {
+    // Windows: the target may be briefly locked (antivirus); fall back to a direct write
+    fs.writeFileSync(file, JSON.stringify(meta, null, 2), 'utf-8');
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 // ---------- sync with changes made on disk (terminal, other editors) ----------
@@ -340,9 +359,15 @@ projectsRouter.get(
     const list = fs
       .readdirSync(PROJECTS_DIR, { withFileTypes: true })
       .filter((d) => d.isDirectory() && isValidId(d.name) && fs.existsSync(path.join(PROJECTS_DIR, d.name, META_FILE)))
-      .map((d) => {
-        const meta = readMeta(d.name);
-        return { id: meta.id, name: meta.name, createdAt: meta.createdAt, updatedAt: meta.updatedAt, fileCount: meta.files.length };
+      .flatMap((d) => {
+        // A damaged project file must not hide all the other projects
+        try {
+          const meta = readMeta(d.name);
+          return [{ id: meta.id, name: meta.name, createdAt: meta.createdAt, updatedAt: meta.updatedAt, fileCount: meta.files.length }];
+        } catch (err: any) {
+          console.error(`Project ${d.name} cannot be read:`, err?.message || err);
+          return [];
+        }
       })
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return { projects: list };

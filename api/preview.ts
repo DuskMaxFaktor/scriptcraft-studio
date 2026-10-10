@@ -83,7 +83,13 @@ previewRouter.get(/^\/([a-zA-Z0-9_-]{1,80})(?:\/(.*))?$/, (req, res) => {
   if (!LOCAL_HOSTNAMES.has(hostname)) return res.status(403).send('Forbidden');
 
   const projectId = (req.params as any)[0] as string;
-  let rel = safeRel(decodeURIComponent(((req.params as any)[1] as string) || ''));
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(((req.params as any)[1] as string) || '');
+  } catch {
+    return res.status(400).send('Bad path'); // "%" not followed by two hex digits
+  }
+  let rel = safeRel(decoded);
   if (rel === null) return res.status(400).send('Bad path');
 
   const root = path.join(process.cwd(), 'projects', projectId);
@@ -123,6 +129,10 @@ export function startPreviewServer(studioPort: number): Promise<number> {
   if (previewServer) return Promise.resolve(previewPort);
   const app = express();
   app.use('/preview', previewRouter);
+  // A broken URL ("%" without two hex digits...): a short answer, never a stack trace with server paths
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(err?.status && err.status < 500 ? err.status : 500).type('text').send(err?.status === 400 ? 'Bad path' : 'Server error');
+  });
   return new Promise((resolve) => {
     const tryPort = (port: number, attempts: number) => {
       const srv = app.listen(port, '127.0.0.1');

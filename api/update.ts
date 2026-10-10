@@ -103,18 +103,40 @@ function checkDownloadUrl(u: string) {
   if (url.protocol !== 'https:' || !/(^|\.)github(usercontent)?\.com$/.test(url.hostname)) throw new UpdateError(502, 'The release points outside GitHub');
 }
 
-async function download(url: string, file: string) {
+export async function download(url: string, file: string) {
   checkDownloadUrl(url);
   const res = await fetch(url, { headers: { 'User-Agent': 'ScriptCraft-Studio' }, signal: AbortSignal.timeout(15 * 60 * 1000) });
   if (!res.ok || !res.body) throw new UpdateError(502, `Download failed (${res.status})`);
   const out = fs.createWriteStream(file);
+  // Disk full, an antivirus lock...: the error ends this update instead of crashing the studio
+  let failed: Error | null = null;
+  const failedOnce = new Promise<never>((_, reject) =>
+    out.once('error', (e) => {
+      failed = e;
+      reject(new UpdateError(500, `Cannot save the download: ${e.message}`));
+    })
+  );
+  failedOnce.catch(() => {});
   const reader = res.body.getReader();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    if (!out.write(value)) await new Promise<void>((r) => out.once('drain', () => r()));
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (failed) throw failed;
+      if (!out.write(value)) await Promise.race([new Promise<void>((r) => out.once('drain', () => r())), failedOnce]);
+    }
+    await Promise.race([new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve()))), failedOnce]);
+  } catch (err) {
+    reader.cancel().catch(() => {});
+    out.destroy();
+    // Remove the half-written file; cleaning up must never hide the real reason
+    try {
+      if (fs.statSync(file).isFile()) fs.rmSync(file, { force: true });
+    } catch {
+      /* nothing was written */
+    }
+    throw err instanceof UpdateError ? err : new UpdateError(500, `Download failed: ${(err as Error).message}`);
   }
-  await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
 }
 
 const sha256 = (file: string) =>

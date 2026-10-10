@@ -76,7 +76,8 @@ const isRepo = (dir: string) => fs.existsSync(path.join(dir, '.git'));
 function safePath(dir: string, p: unknown): string {
   if (typeof p !== 'string' || !p || p.length > 500) throw new GitError(400, 'Invalid path');
   const rel = p.replace(/\\/g, '/');
-  if (rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').some((s) => s === '..' || s === '.git')) {
+  // ".GIT" is the same folder on Windows: compare without case
+  if (rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').some((s) => s === '..' || s.toLowerCase() === '.git')) {
     throw new GitError(400, 'Invalid path');
   }
   const abs = path.resolve(dir, rel);

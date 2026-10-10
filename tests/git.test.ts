@@ -121,7 +121,7 @@ test('git: unsafe paths, remotes and ids are rejected', { skip: !hasGit && 'git 
   const p = (await api('POST', '/api/projects', { name: 'safe', files: [{ name: 'a.py', content: 'x' }] })).data;
   const g = `/api/git/${p.id}`;
   await api('POST', `${g}/init`);
-  for (const bad of ['../../server.ts', '..\\x', 'C:/Windows/win.ini', '/etc/passwd', '.git/config']) {
+  for (const bad of ['../../server.ts', '..\\x', 'C:/Windows/win.ini', '/etc/passwd', '.git/config', '.GIT/config', 'sub/.Git/HEAD']) {
     assert.equal((await api('GET', `${g}/diff?path=${encodeURIComponent(bad)}`)).status, 400, bad);
     assert.equal((await api('POST', `${g}/discard`, { path: bad })).status, 400, bad);
   }

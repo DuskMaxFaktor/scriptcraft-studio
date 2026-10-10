@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { StringDecoder } from 'string_decoder';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -52,8 +53,11 @@ function kernelEnv(projectId: string | null): { cwd: string; env: NodeJS.Process
 function attachProc(k: Kernel) {
   k.buf = '';
   const proc = k.proc; // bind handlers to THIS process, so a restart's old process stays quiet
+  // A character split between two chunks is joined, not garbled
+  const outDec = new StringDecoder('utf8');
+  const errDec = new StringDecoder('utf8');
   proc.stdout?.on('data', (chunk: Buffer) => {
-    k.buf += chunk.toString('utf-8');
+    k.buf += outDec.write(chunk);
     let i;
     while ((i = k.buf.indexOf('\n')) >= 0) {
       const line = k.buf.slice(0, i);
@@ -77,7 +81,10 @@ function attachProc(k: Kernel) {
     }
   });
   // The kernel routes program output as JSON on stdout; raw stderr means a crash/import error
-  proc.stderr?.on("data", (chunk: Buffer) => emit(k, { type: 'stream', name: 'stderr', text: chunk.toString('utf-8') }));
+  proc.stderr?.on('data', (chunk: Buffer) => {
+    const text = errDec.write(chunk);
+    if (text) emit(k, { type: 'stream', name: 'stderr', text });
+  });
   proc.on('exit', (code) => {
     // Only report death for the CURRENT process (a restart's old process exiting is expected)
     if (kernels.get(k.id) === k && k.proc === proc) emit(k, { type: 'kernel', status: 'dead', code });
