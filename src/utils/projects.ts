@@ -250,7 +250,7 @@ export async function readImportedFiles(
   input: FileList | File[] | PickedFile[],
   existingNames: string[] = [],
   stripRoot = false
-): Promise<{ files: ProjectFilePayload[]; skipped: string[] }> {
+): Promise<{ files: ProjectFilePayload[]; skipped: string[]; binaries: { name: string; data: Blob }[] }> {
   const picked: PickedFile[] =
     Array.isArray(input) && input.length > 0 && 'path' in (input[0] as any)
       ? (input as PickedFile[])
@@ -258,9 +258,11 @@ export async function readImportedFiles(
   const taken = new Set(existingNames.map((n) => n.toLowerCase()));
   const files: ProjectFilePayload[] = [];
   const skipped: string[] = [];
+  // .exe, .dll, pictures, databases...: uploaded into the project folder as they are
+  const binaries: { name: string; data: Blob }[] = [];
 
   // Collect (path, loader) pairs first so a shared root folder can be stripped
-  const items: { path: string; size: number; load: () => Promise<string> }[] = [];
+  const items: { path: string; size: number; load: () => Promise<string>; blob: () => Promise<Blob> }[] = [];
   for (const { file, path: rawPath } of picked) {
     const p = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
     if (isIgnoredPath(p)) continue;
@@ -269,27 +271,47 @@ export async function readImportedFiles(
       const zipDir = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '';
       for (const entry of Object.values(zip.files)) {
         if (entry.dir || isIgnoredPath(entry.name)) continue;
-        items.push({ path: zipDir + entry.name, size: 0, load: () => entry.async('string') });
+        items.push({ path: zipDir + entry.name, size: 0, load: () => entry.async('string'), blob: () => entry.async('blob') });
       }
     } else {
-      items.push({ path: p, size: file.size, load: () => file.text() });
+      items.push({ path: p, size: file.size, load: () => file.text(), blob: async () => file });
     }
   }
 
   const root = stripRoot ? commonRootFolder(items.map((i) => i.path)) : null;
   for (const item of items) {
     const rel = root ? item.path.slice(root.length + 1) : item.path;
-    if (files.length >= MAX_IMPORT_FILES || item.size > MAX_IMPORT_BYTES) {
+    if (files.length + binaries.length >= MAX_IMPORT_FILES || item.size > MAX_BINARY_BYTES) {
       skipped.push(rel);
+      continue;
+    }
+    // Known binary types, big files and anything with binary content go to the folder as they are
+    if (BINARY_EXT.test(rel) || item.size > MAX_IMPORT_BYTES) {
+      binaries.push({ name: rel, data: await item.blob() });
       continue;
     }
     const content = await item.load();
     if (content.length > MAX_IMPORT_BYTES || looksBinary(content)) {
-      skipped.push(rel);
+      binaries.push({ name: rel, data: await item.blob() });
       continue;
     }
     const name = uniqueName(rel, taken);
     files.push({ name, language: detectLanguageFromName(name), content });
   }
-  return { files, skipped };
+  return { files, skipped, binaries };
+}
+
+const MAX_BINARY_BYTES = 200 * 1024 * 1024;
+const BINARY_EXT = /\.(exe|dll|sys|ocx|pyd|so|dylib|o|obj|bin|png|jpe?g|gif|webp|bmp|ico|db|sqlite3?|wav|mp3|ogg|mp4|webm|pdf|zip|7z|rar)$/i;
+
+/** Upload one binary file into the project folder; returns the name it got (a free one if taken). */
+export async function uploadBinary(projectId: string, name: string, data: Blob): Promise<string> {
+  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/upload?path=${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: data,
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || `Upload failed (${res.status})`);
+  return out.name;
 }

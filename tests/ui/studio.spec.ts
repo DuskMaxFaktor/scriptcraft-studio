@@ -3,6 +3,7 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
+import zlib from 'zlib';
 
 const hasPython = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['--version'], { shell: true }).status === 0;
 
@@ -1299,6 +1300,24 @@ test('disassembler: clicking a jmp target jumps to it; search filters instructio
   await viewer.locator('[data-disasm-search]').fill('ret');
   await expect(viewer.locator('[data-ins]')).toHaveCount(1);
   await expect(viewer.locator('[data-ins]')).toContainText('ret');
+});
+
+test('an .exe picked with "Add files from PC" goes into the project and opens in the disassembler', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  // The same tiny x64 PE as the other disassembler tests
+  const exe = zlib.inflateSync(
+    Buffer.from('eJzzjWIgGzgwMDAEuDIwpLQxooh/YFBi4GZiYOBHFhSAYgYGB0YYn4mBgQ0qDaMZFCDiIMBMpDsEyPcC1YBeSWpFCQPUz1C/wfwBAwoMDAkD5Dyc4CUr0L0TQMCj+Y3G4YF2ziigMwAAckINQA==', 'base64')
+  );
+  const project = await openStudio(page, request, 'Загрузка exe', [{ name: 'main.py', content: 'print(1)', isEntry: true }]);
+  await page.locator('input[data-import-files]').setInputFiles({ name: 'crackme.exe', mimeType: 'application/octet-stream', buffer: exe });
+  const viewer = page.locator('[data-asset-viewer="crackme.exe"]');
+  await expect(viewer).toBeVisible({ timeout: 15_000 });
+  await viewer.locator('[data-disasm-tab="disasm"]').click();
+  await expect(viewer.locator('[data-ins="5368713216"]')).toContainText('jmp');
+  await expect(page.locator('[data-asset="crackme.exe"]')).toBeVisible();
+  // Byte for byte on disk
+  const raw = Buffer.from(await (await request.get(`/api/projects/${project.id}/raw?path=crackme.exe`)).body());
+  expect(raw.equals(exe)).toBeTruthy();
 });
 
 test('disassembler: an instruction is rewritten in assembly; shorter code is padded with nop', async ({ page, request }) => {

@@ -451,6 +451,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ref={importRef}
             type="file"
             multiple
+            data-import-files
             className="hidden"
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) onImportFiles(e.target.files);

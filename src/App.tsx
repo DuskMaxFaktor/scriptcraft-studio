@@ -9,7 +9,7 @@ import { stripAnsi } from './utils/ansi.tsx';
 import type { DebugUiState } from './components/DebugPanel.tsx';
 import { startDebugSession, debuggableLanguage, type Breakpoints, type Breakpoint, type DebugSessionHandle, type DebugCommand } from './utils/debugClient.ts';
 import { getSelectedModelId } from './utils/models.ts';
-import { changedPayload,
+import { uploadBinary, changedPayload,
   projectsApi,
   filesToPayload,
   payloadToFiles,
@@ -56,6 +56,8 @@ export default function App() {
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   /** name -> content the server has for the open project (what an autosave can leave out) */
   const savedContentRef = useRef<Map<string, string>>(new Map());
+  /** Refresh the list of binary files (pictures, programs...) of the open project */
+  const reloadAssetsRef = useRef<() => Promise<unknown>>(async () => {});
   const [aboutTab, setAboutTab] = useState<'help' | 'updates' | 'report' | 'legal'>('updates');
   const openAbout = (tab: 'help' | 'updates' | 'report' | 'legal') => {
     setAboutTab(tab);
@@ -800,7 +802,24 @@ export default function App() {
   // Import files from the PC into the current project
   const handleImportFiles = async (picked: FileList | PickedFile[]) => {
     try {
-      const { files: imported, skipped } = await readImportedFiles(picked, files.map((f) => f.name));
+      const { files: imported, skipped, binaries } = await readImportedFiles(picked, files.map((f) => f.name));
+      // .exe / .dll / pictures / databases: into the project folder as they are; one program opens in the disassembler
+      if (binaries.length && currentProjectRef.current) {
+        const projectId = currentProjectRef.current.id;
+        const uploaded: string[] = [];
+        for (const b of binaries) {
+          try {
+            uploaded.push(await uploadBinary(projectId, b.name, b.data));
+          } catch (e: any) {
+            addLog({ id: generateId(), type: 'error', message: `${b.name}: ${e.message}`, timestamp: getTimestamp() });
+          }
+        }
+        if (uploaded.length) {
+          addLog({ id: generateId(), type: 'success', message: t('app.binariesImported', { count: uploaded.length, files: uploaded.join(', ') }), timestamp: getTimestamp() });
+          await reloadAssetsRef.current();
+          if (!imported.length) setViewAsset(uploaded.find((n) => /\.(exe|dll|sys|so|dylib|bin)$/i.test(n)) || uploaded[0]);
+        }
+      }
       if (imported.length > 0) {
         const newItems = payloadToFiles(imported);
         setFiles((prev) => [...prev, ...newItems]);
@@ -943,6 +962,7 @@ export default function App() {
         .then((r) => r.json())
         .then((d) => currentProjectRef.current?.id === projectId && setAssets(d.assets || []))
         .catch(() => {});
+    reloadAssetsRef.current = loadAssets;
     setAssets([]);
     setViewAsset(null);
     loadAssets();

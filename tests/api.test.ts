@@ -173,6 +173,29 @@ test('projects: a save may leave out unchanged contents; unchanged files are not
   await api('DELETE', `/api/projects/${p.id}`);
 });
 
+test('projects: binary files are uploaded as they are; a taken name gets a free one; service paths refused', async () => {
+  const p = (await api('POST', '/api/projects', { name: 'upload', files: [{ name: 'main.py', content: 'print(1)' }] })).data;
+  const dir = path.join(tmp, 'projects', p.id);
+  const bytes = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0xff]);
+  const up = (name: string, body: Buffer) =>
+    fetch(`${base}/api/projects/${p.id}/upload?path=${encodeURIComponent(name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body }).then(async (r) => ({ status: r.status, data: await r.json() }));
+  let r = await up('tools/app.exe', bytes);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.name, 'tools/app.exe');
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'tools', 'app.exe')), bytes);
+  // Never overwrites: neither the uploaded file nor a project file
+  assert.equal((await up('tools/app.exe', Buffer.from([1]))).data.name, 'tools/app (2).exe');
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'tools', 'app.exe')), bytes);
+  assert.equal((await up('main.py', Buffer.from([0]))).data.name, 'main (2).py');
+  assert.equal(fs.readFileSync(path.join(dir, 'main.py'), 'utf-8'), 'print(1)');
+  // The binary shows in the project's other files
+  const assets = (await api('GET', `/api/projects/${p.id}/assets`)).data.assets;
+  assert.ok(assets.some((a: any) => a.name === 'tools/app.exe' && a.kind === 'binary'));
+  for (const bad of ['../evil.exe', '.env', '.git/x', 'node_modules/x.dll']) assert.equal((await up(bad, bytes)).status, 400, bad);
+  assert.equal((await up('empty.bin', Buffer.alloc(0))).status, 400);
+  await api('DELETE', `/api/projects/${p.id}`);
+});
+
 test('projects: chat history is stored per project', async () => {
   const p = (await api('POST', '/api/projects', { name: 'chat', files: [] })).data;
   assert.deepEqual((await api('GET', `/api/projects/${p.id}/chat`)).data.messages, []);

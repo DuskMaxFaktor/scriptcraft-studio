@@ -56,7 +56,7 @@ The panel on the right. The Gemini key — the chip icon in the header → "AI m
 
 ## Disassembler
 
-Open an `.exe` / `.dll` (or ELF / Mach-O): headers, sections, imports and assembly code. Search instructions, follow `jmp`/`call` targets, patch bytes and **rewrite an instruction in assembly** (double-click a line: `nop`, `jmp 0x401020`, `mov eax, 1` — the studio shows the bytes, pads a shorter instruction with `nop` and warns when a longer one overwrites the next ones). The original file is kept as `.bak`.
+Add an `.exe` / `.dll` (or ELF / Mach-O) with "Add files from PC" or drag it into the explorer — it opens in the disassembler right away (later — from the file list at the bottom of the explorer): headers, sections, imports and assembly code. Search instructions, follow `jmp`/`call` targets, patch bytes and **rewrite an instruction in assembly** (double-click a line: `nop`, `jmp 0x401020`, `mov eax, 1` — the studio shows the bytes, pads a shorter instruction with `nop` and warns when a longer one overwrites the next ones). The original file is kept as `.bak`.
 
 ## Programs on this PC
 
