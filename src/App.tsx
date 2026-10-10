@@ -1242,6 +1242,7 @@ export default function App() {
               <NotebookView
                 key={activeFile.id}
                 content={activeFile.content}
+                fileName={activeFile.name}
                 projectId={currentProject?.id || null}
                 onChange={(c) => handleUpdateFileContent(activeFile.id, c)}
               />

@@ -38,7 +38,7 @@ The "Tests" tab: `test_*.py` files run with **pytest**, `*.test.js` / `*.spec.ts
 
 ## Jupyter notebooks
 
-`.ipynb` files open as notebooks: code and text cells, `Shift+Enter` runs a cell. matplotlib charts show right under the cell. "Interrupt" stops a long cell, "Restart" clears the variables.
+`.ipynb` files open as notebooks: code and text cells, `Shift+Enter` runs a cell. matplotlib charts show right under the cell. "Interrupt" stops a long cell, "Restart" clears the variables. **"Variables"** lists everything the notebook holds (name, type, size, value); **"Export"** saves it as a `.py` script (`# %%` cells) or an `.html` page with the results and charts.
 
 ## Git
 

@@ -908,6 +908,53 @@ test('notebook: markdown renders and a code cell runs against a stateful kernel'
   await page.goto('about:blank');
 });
 
+test('notebook: variables panel follows the kernel; export to .py and to HTML with outputs', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const ipynb = JSON.stringify({
+    cells: [
+      { cell_type: 'markdown', metadata: {}, source: ['# Отчёт\n', 'Формула: **жирно**'] },
+      { cell_type: 'code', metadata: {}, execution_count: null, source: ['prices = [10, 20, 30]\ntotal = sum(prices)\nprint("итого", total)'], outputs: [] },
+      { cell_type: 'code', metadata: {}, execution_count: null, source: [`import base64\nclass Img:\n    def _repr_png_(self):\n        return base64.b64decode("${PNG}")\nImg()`], outputs: [] },
+    ],
+    metadata: {},
+    nbformat: 4,
+    nbformat_minor: 5,
+  });
+  const project = (await (await request.post('/api/projects', { data: { name: 'Экспорт блокнота', files: [{ name: 'report.ipynb', language: 'text', content: ipynb, isEntry: true }] } })).json()) as { id: string };
+  await page.addInitScript((id) => localStorage.setItem('scriptcraft-last-project', id), project.id);
+  await page.goto('/');
+  await expect(page.locator('[data-notebook]')).toBeVisible();
+
+  await page.locator('[data-nb-vars-toggle]').click();
+  const panel = page.locator('[data-nb-vars]');
+  await expect(panel).toContainText('Запустите ячейку');
+  await page.getByRole('button', { name: 'Запустить всё', exact: true }).click();
+  await expect(page.locator('[data-cell-image]')).toBeVisible({ timeout: 30_000 });
+  await expect(panel.locator('[data-nb-var="total"]')).toContainText('60');
+  await expect(panel.locator('[data-nb-var="prices"]')).toContainText('[3]');
+  await expect(panel.locator('[data-nb-var="base64"]')).toHaveCount(0); // modules are not variables
+
+  // .py: percent cells, markdown as comments
+  await page.locator('[data-nb-export]').click();
+  const [py] = await Promise.all([page.waitForEvent('download'), page.locator('[data-nb-export-py]').click()]);
+  expect(py.suggestedFilename()).toBe('report.py');
+  const pyText = fs.readFileSync(await py.path(), 'utf-8');
+  expect(pyText).toContain('# %% [markdown]\n# # Отчёт');
+  expect(pyText).toContain('# %%\nprices = [10, 20, 30]');
+
+  // HTML: rendered text, code and its outputs, the picture inline
+  await page.locator('[data-nb-export]').click();
+  const [html] = await Promise.all([page.waitForEvent('download'), page.locator('[data-nb-export-html]').click()]);
+  expect(html.suggestedFilename()).toBe('report.html');
+  const page2 = fs.readFileSync(await html.path(), 'utf-8');
+  expect(page2).toContain('<h1>Отчёт</h1>');
+  expect(page2).toContain('<strong>жирно</strong>');
+  expect(page2).toContain('итого 60');
+  expect(page2).toContain(`data:image/png;base64,${PNG}`);
+  expect(page2).not.toContain('<script');
+});
+
 test('notebook: a cell that returns an image shows it inline', async ({ page, request }) => {
   test.skip(!hasPython, 'python not installed');
   const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';

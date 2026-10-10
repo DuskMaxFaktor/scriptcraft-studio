@@ -161,3 +161,31 @@ test('a rich object (_repr_png_) is shown as an image, not text', { skip: !hasPy
 
   await api('DELETE', `/api/notebook/kernel/${kernelId}`);
 });
+
+test('variables: names, types, sizes and previews; private names and modules are left out; works while a cell runs', { skip: !hasPython && 'python not installed' }, async () => {
+  const start = await api('POST', '/api/notebook/kernel/start', {});
+  const kernelId = start.data.kernelId;
+  const wait = kernelEvents(kernelId);
+  const exec = async (code: string) => wait((await api('POST', `/api/notebook/kernel/${kernelId}/exec`, { code })).data.execId);
+
+  await exec('import math\nx = 41\nname = "Аня"\ndata = [1, 2, 3]\n_hidden = 1\nbig = "z" * 1000\nclass Point:\n    pass\np = Point()');
+  const { vars } = (await api('GET', `/api/notebook/kernel/${kernelId}/vars`)).data;
+  const by = Object.fromEntries(vars.map((v: any) => [v.name, v]));
+  assert.deepEqual(Object.keys(by).sort(), ['Point', 'big', 'data', 'name', 'p', 'x']);
+  assert.deepEqual([by.x.type, by.x.value], ['int', '41']);
+  assert.deepEqual([by.name.type, by.name.size, by.name.value], ['str', '3', "'Аня'"]);
+  assert.deepEqual([by.data.type, by.data.size], ['list', '3']);
+  assert.ok(by.big.value.length <= 201 && by.big.value.endsWith('…'));
+  assert.equal(by.p.type, '__main__.Point');
+
+  // A long cell is running: the list still answers (and sees the variables set so far)
+  const r = await api('POST', `/api/notebook/kernel/${kernelId}/exec`, { code: 'during = 1\nimport time\ntime.sleep(3)' });
+  await new Promise((res) => setTimeout(res, 500));
+  const t0 = Date.now();
+  const during = (await api('GET', `/api/notebook/kernel/${kernelId}/vars`)).data.vars.map((v: any) => v.name);
+  assert.ok(Date.now() - t0 < 2000, 'answered without waiting for the cell');
+  assert.ok(during.includes('during'));
+  await wait(r.data.execId);
+  assert.equal((await api('GET', '/api/notebook/kernel/nope/vars')).status, 404);
+  await api('DELETE', `/api/notebook/kernel/${kernelId}`);
+});

@@ -26,6 +26,8 @@ interface Kernel {
 
 const kernels = new Map<string, Kernel>();
 let seq = 0;
+/** Answers to "vars" requests: not part of the cell output history */
+const pendingVars = new Map<string, (vars: unknown) => void>();
 
 function emit(k: Kernel, e: any) {
   k.events.push(e);
@@ -66,6 +68,9 @@ function attachProc(k: Kernel) {
       if (msg.ready) {
         k.ready = true;
         emit(k, { type: 'kernel', status: 'ready' });
+      } else if (msg.type === 'vars') {
+        pendingVars.get(msg.execId)?.(msg.vars || []);
+        pendingVars.delete(msg.execId);
       } else {
         emit(k, msg);
       }
@@ -162,6 +167,32 @@ notebookRouter.post('/kernel/:id/exec', (req, res) => {
     return res.status(500).json({ error: 'Kernel is not accepting input' });
   }
   res.json({ execId });
+});
+
+// The notebook's variables: name, type, size, a short preview
+notebookRouter.get('/kernel/:id/vars', async (req, res) => {
+  const k = kernels.get(req.params.id);
+  if (!k) return res.status(404).json({ error: 'Kernel not found' });
+  if (!k.ready) return res.json({ vars: [] });
+  const execId = `v${++seq}`;
+  const vars = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingVars.delete(execId);
+      resolve(null);
+    }, 5000);
+    pendingVars.set(execId, (v) => {
+      clearTimeout(timer);
+      resolve(v);
+    });
+    try {
+      k.proc.stdin?.write(JSON.stringify({ cmd: 'vars', execId }) + '\n');
+    } catch {
+      clearTimeout(timer);
+      resolve(null);
+    }
+  });
+  if (vars === null) return res.status(504).json({ error: 'The kernel did not answer' });
+  res.json({ vars });
 });
 
 // Interrupt the running cell (soft: KeyboardInterrupt in the kernel; the namespace is kept)

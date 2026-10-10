@@ -6,6 +6,7 @@
 #        {"execId","type":"result","text": "<repr of the last expression>"}
 #        {"execId","type":"error","ename","evalue","traceback"}
 #        {"execId","type":"done","status":"ok"|"error"}
+#   in:  {"cmd": "vars", "execId"}  ->  out: {"execId","type":"vars","vars":[{name,type,size,value}]}
 # The first line printed is {"ready": true}.
 import sys
 import io
@@ -50,6 +51,8 @@ def _no_input(*_args, **_kwargs):
 
 
 ns = {"__name__": "__main__", "__builtins__": __builtins__, "input": _no_input}
+# What the kernel itself put there: not the user's variables (unless the user replaces them)
+_KERNEL_NAMES = dict(ns)
 
 
 def _clean_traceback(exc):
@@ -144,6 +147,42 @@ def _executor():
         send({"execId": _cur["id"], "type": "done", "status": status})
 
 
+def _describe(value):
+    """Type, size and a short preview of a variable (never fails, never runs for long)."""
+    t = type(value)
+    kind = t.__name__ if t.__module__ in ("builtins", "__builtin__") else f"{t.__module__.split('.')[0]}.{t.__name__}"
+    size = ""
+    shape = getattr(value, "shape", None)
+    if isinstance(shape, tuple) and all(isinstance(n, int) for n in shape):
+        size = " × ".join(str(n) for n in shape)
+    elif isinstance(value, (str, bytes, list, tuple, dict, set, frozenset)):
+        size = str(len(value))
+    try:
+        text = repr(value)
+    except Exception as exc:
+        text = f"<repr failed: {exc}>"
+    text = " ".join(text.split())
+    return {"type": kind, "size": size, "value": text[:200] + ("…" if len(text) > 200 else "")}
+
+
+def _variables():
+    """The user's names in the notebook namespace: no _private ones, no imported modules."""
+    import types
+    out = []
+    for name, value in sorted(list(ns.items())):
+        if name.startswith("_") or isinstance(value, types.ModuleType):
+            continue
+        if name in _KERNEL_NAMES and _KERNEL_NAMES[name] is value:
+            continue
+        try:
+            out.append({"name": name, **_describe(value)})
+        except Exception:
+            continue
+        if len(out) >= 500:
+            break
+    return out
+
+
 def _interrupt():
     """Raise KeyboardInterrupt in the executor thread (soft interrupt, keeps the namespace)."""
     tid = _executor_tid[0]
@@ -171,6 +210,12 @@ def main():
             continue
         if msg.get("cmd") == "interrupt":
             _interrupt()
+        elif msg.get("cmd") == "vars":
+            # Answered on this thread, so the list shows even while a long cell runs
+            try:
+                send({"execId": msg.get("execId"), "type": "vars", "vars": _variables()})
+            except Exception as exc:
+                send({"execId": msg.get("execId"), "type": "vars", "vars": [], "error": str(exc)})
         else:
             _exec_q.put(msg)
 
