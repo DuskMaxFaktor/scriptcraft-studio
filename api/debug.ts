@@ -365,10 +365,8 @@ function startNode(
           const rel = relOf(url);
           if (rel) {
             scriptRels.set(scriptId, rel);
-            // Refresh so URL-fallback BPs are replaced by scriptId binds (CI path mismatches).
-            if (currentBps[rel]?.length) {
-              applyChain = applyChain.then(() => applyBreakpointsInner(currentBps)).catch(() => undefined);
-            }
+            // Additive bind only — a full refresh here can clear BPs after the program has resumed.
+            applyChain = applyChain.then(() => applyBreakpointsForScript(scriptId, rel)).catch(() => undefined);
           }
         }
       } else if (data.method === 'Debugger.paused') onPaused(data.params);
@@ -383,6 +381,7 @@ function startNode(
       // one tick lets those handlers fill scriptRels before we bind + resume.
       await new Promise((r) => setImmediate(r));
       await applyBreakpoints(currentBps);
+      await applyChain;
       await send('Runtime.runIfWaitingForDebugger');
     };
     ws.onerror = () => emit(s, { event: 'error', message: 'Cannot connect to the Node.js debugger' });
