@@ -52,7 +52,12 @@ apiRouter.use('/projects', projectsRouter);
 apiRouter.use('/run', runRouter);
 
 apiRouter.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), previewPort: getPreviewPort() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    previewPort: getPreviewPort(),
+    platform: process.platform,
+  });
 });
 
 // Documents shipped next to the studio, for the "Licenses and data" tab of the About window

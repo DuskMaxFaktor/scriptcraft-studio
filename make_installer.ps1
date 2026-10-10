@@ -51,6 +51,10 @@ try {
 } finally { $outStream.Dispose() }
 Remove-Item $stub -ErrorAction SilentlyContinue
 
+# Optional Authenticode signature (SCRIPTCRAFT_SIGN_THUMBPRINT). SHA-256 digest is computed after signing.
+. (Join-Path $Root "scripts\sign_exe.ps1")
+Sign-ScriptCraftExe -Path $Out
+
 $hash = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLower()
 Set-Content -Path "$Out.sha256" -Value "$hash  $(Split-Path $Out -Leaf)" -Encoding ascii -NoNewline
 $mb = [math]::Round((Get-Item $Out).Length / 1MB, 1)

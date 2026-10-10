@@ -18,6 +18,8 @@ interface Props {
 interface GhInfo {
   installed: boolean;
   account: string | null;
+  /** Studio can open gh's browser sign-in window (Windows only) */
+  loginInStudio?: boolean;
 }
 
 export const GitHubPublish: React.FC<Props> = ({ projectId, defaultName, onBeforePublish, onPublished }) => {
@@ -89,25 +91,36 @@ export const GitHubPublish: React.FC<Props> = ({ projectId, defaultName, onBefor
           </a>
         </p>
       ) : !info.account ? (
-        <div className="space-y-1">
-          <div className="flex gap-1">
-            <button
-              onClick={async () => {
-                setError(null);
-                const r = await fetch(`${base}/login`, { method: 'POST' });
-                if (!r.ok) setError((await r.json()).error);
-                else setWaitingLogin(true);
-              }}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-semibold"
-            >
-              <LogIn className="w-3 h-3" /> {t('gh.login')}
-            </button>
-            <button onClick={load} className="px-2 py-1.5 rounded bg-panel border border-slate-700 text-slate-300" title={t('gh.check')}>
-              <RefreshCw className="w-3 h-3" />
+        info.loginInStudio === false ? (
+          <div className="space-y-1">
+            <p className="px-1 text-[11px] text-slate-500 leading-snug" data-github-login-terminal>
+              {t('gh.loginTerminal')}
+            </p>
+            <button onClick={load} className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-panel border border-slate-700 text-slate-300 text-[11px]" title={t('gh.check')}>
+              <RefreshCw className="w-3 h-3" /> {t('gh.check')}
             </button>
           </div>
-          {waitingLogin && <p className="px-1 text-[10px] text-slate-500">{t('gh.loginHint')}</p>}
-        </div>
+        ) : (
+          <div className="space-y-1">
+            <div className="flex gap-1">
+              <button
+                onClick={async () => {
+                  setError(null);
+                  const r = await fetch(`${base}/login`, { method: 'POST' });
+                  if (!r.ok) setError((await r.json()).error);
+                  else setWaitingLogin(true);
+                }}
+                className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-white text-[11px] font-semibold"
+              >
+                <LogIn className="w-3 h-3" /> {t('gh.login')}
+              </button>
+              <button onClick={load} className="px-2 py-1.5 rounded bg-panel border border-slate-700 text-slate-300" title={t('gh.check')}>
+                <RefreshCw className="w-3 h-3" />
+              </button>
+            </div>
+            {waitingLogin && <p className="px-1 text-[10px] text-slate-500">{t('gh.loginHint')}</p>}
+          </div>
+        )
       ) : !open ? (
         <button
           onClick={() => setOpen(true)}

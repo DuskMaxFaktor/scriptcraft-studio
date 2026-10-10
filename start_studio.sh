@@ -29,8 +29,11 @@ SERVER=$!
 trap 'kill "$SERVER" 2>/dev/null || true' EXIT INT TERM
 
 # Wait for the server (the first start installs packages and builds the interface: give it time)
+# Portable loop: `seq` is missing on some minimal macOS / Alpine images
 ready=0
-for _ in $(seq 1 600); do
+i=0
+while [ "$i" -lt 600 ]; do
+  i=$((i + 1))
   if node -e "fetch('$URL/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))" 2>/dev/null; then ready=1; break; fi
   kill -0 "$SERVER" 2>/dev/null || break
   sleep 1

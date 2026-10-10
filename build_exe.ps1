@@ -215,6 +215,8 @@ if (Test-Path $csc) {
 }
 
 if (Test-Path $outputExe) {
+    . (Join-Path $ScriptDir "scripts\sign_exe.ps1")
+    Sign-ScriptCraftExe -Path $outputExe
     Write-Host ""
     Write-Host "===========================================================" -ForegroundColor Green
     Write-Host " [SUCCESS] ScriptCraftStudio.exe compiled successfully!" -ForegroundColor Green

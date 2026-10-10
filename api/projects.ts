@@ -160,7 +160,7 @@ function writeMeta(meta: ProjectMeta) {
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', '.hg', '__pycache__', '.venv', 'venv', '.packages', '.history', '.idea', '.vscode', '.pytest_cache', '.mypy_cache']);
 const LANG_BY_EXT: Record<string, string> = {
   py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', html: 'html', htm: 'html',
-  css: 'css', sh: 'bash', bash: 'bash', sql: 'sql', json: 'json', md: 'markdown', markdown: 'markdown',
+  css: 'css', sh: 'bash', bash: 'bash', ps1: 'powershell', sql: 'sql', json: 'json', md: 'markdown', markdown: 'markdown',
 };
 
 /** Files the studio itself just wrote: their watcher events are not "external" changes. */

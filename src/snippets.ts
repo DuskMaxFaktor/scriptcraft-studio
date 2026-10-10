@@ -10,7 +10,7 @@ export interface Snippet {
 }
 
 // Languages that get snippet completions (Monaco language ids). Custom snippets may target any of them.
-export const SNIPPET_LANGUAGES = ['python', 'javascript', 'typescript', 'html', 'css', 'shell', 'sql', 'json', 'markdown', 'plaintext'];
+export const SNIPPET_LANGUAGES = ['python', 'javascript', 'typescript', 'html', 'css', 'shell', 'powershell', 'sql', 'json', 'markdown', 'plaintext'];
 
 const CUSTOM_KEY = 'scriptcraft-custom-snippets';
 let custom: Record<string, Snippet[]> = loadCustom();
@@ -86,6 +86,14 @@ const BASH: Snippet[] = [
   { prefix: 'func', body: '${1:name}() {\n  ${2}\n}', description: 'Function' },
 ];
 
+const POWERSHELL: Snippet[] = [
+  { prefix: 'param', body: 'param(\n  [Parameter(Mandatory = $true)]\n  [${1:string}]$${2:Name}\n)\n\n${3}', description: 'param block' },
+  { prefix: 'for', body: 'foreach ($${1:item} in $${2:list}) {\n  ${3}\n}', description: 'foreach loop' },
+  { prefix: 'if', body: 'if (${1:condition}) {\n  ${2}\n}', description: 'if statement' },
+  { prefix: 'func', body: 'function ${1:Name} {\n  param(${2})\n  ${3}\n}', description: 'Function' },
+  { prefix: 'try', body: 'try {\n  ${1}\n} catch {\n  Write-Error $_\n}', description: 'try / catch' },
+];
+
 const SQL: Snippet[] = [
   { prefix: 'select', body: 'SELECT ${1:*}\nFROM ${2:table}\nWHERE ${3:condition};', description: 'SELECT' },
   { prefix: 'insert', body: 'INSERT INTO ${1:table} (${2:columns})\nVALUES (${3:values});', description: 'INSERT' },
@@ -97,6 +105,7 @@ const BY_LANGUAGE: Record<string, Snippet[]> = {
   javascript: JS,
   typescript: JS,
   shell: BASH,
+  powershell: POWERSHELL,
   sql: SQL,
 };
 

@@ -433,7 +433,7 @@ export default function App() {
     let success = true;
     let stopped = false;
     try {
-      if (['python', 'javascript', 'typescript', 'bash'].includes(file.language)) {
+      if (['python', 'javascript', 'typescript', 'bash', 'powershell'].includes(file.language)) {
         // Run on the local server with live output, stdin and a Stop button
         // The whole project is sent so files can import each other; when it is saved, the program runs
         // in the project folder itself (files it creates stay in the project)
@@ -1548,6 +1548,8 @@ function getDefaultContentForLanguage(name: string, lang: FileLanguage): string 
       return `// ${name}\nconst greeting: string = "Hello from ${name}!";\nconsole.log(greeting);\n`;
     case 'bash':
       return `#!/usr/bin/env bash\n# ${name}\nset -euo pipefail\n\necho "Running ${name}..."\n`;
+    case 'powershell':
+      return `# ${name}\nWrite-Host "Hello from ${name}!"\n`;
     case 'sql':
       return `-- ${name}\nSELECT 'Hello SQL' AS message, CURRENT_TIMESTAMP AS executed_at;\n`;
     case 'html':

@@ -1216,6 +1216,9 @@ const CodeBlockItem: React.FC<CodeBlockProps> = ({
       case 'bash':
       case 'sh':
         return 'task.sh';
+      case 'powershell':
+      case 'ps1':
+        return 'script.ps1';
       case 'sql':
         return 'query.sql';
       case 'html':

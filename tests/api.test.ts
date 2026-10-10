@@ -227,10 +227,45 @@ test('projects: chat history is stored per project', async () => {
 
 // ---------------- running code ----------------
 
+test('health: reports status and the host platform', async () => {
+  const r = await api('GET', '/api/health');
+  assert.equal(r.data.status, 'ok');
+  assert.equal(r.data.platform, process.platform);
+  assert.equal(typeof r.data.previewPort, 'number');
+});
+
 test('run: JavaScript one-shot', async () => {
   const r = await api('POST', '/api/run', { language: 'javascript', code: 'console.log(6 * 7)' });
   assert.equal(r.data.success, true);
   assert.equal(r.data.stdout.trim(), '42');
+});
+
+const hasPowerShell =
+  process.platform === 'win32' ||
+  spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0'], { encoding: 'utf-8', timeout: 8000, windowsHide: true }).status === 0;
+
+test('run: PowerShell script prints an argument and exits 0', { skip: !hasPowerShell && 'PowerShell / pwsh not installed' }, async () => {
+  const code = 'param([string]$Name)\nWrite-Output "hello:$Name"\nexit 0\n';
+  const files = [{ name: 'greet.ps1', content: code }];
+  const p = (await api('POST', '/api/projects', { name: 'ps1run', files })).data;
+  await api('PUT', `/api/projects/${p.id}/run-config`, { args: 'World', env: [] });
+  const r = await api('POST', '/api/run', {
+    language: 'powershell',
+    code,
+    files,
+    entry: 'greet.ps1',
+    projectId: p.id,
+  });
+  assert.equal(r.data.success, true, r.data.stderr);
+  assert.equal(r.data.exitCode, 0, r.data.stderr);
+  assert.match(r.data.stdout, /hello:World/);
+  await api('DELETE', `/api/projects/${p.id}`);
+});
+
+test('run: without PowerShell Core the error names pwsh', { skip: hasPowerShell && 'PowerShell is installed' }, async () => {
+  const r = await api('POST', '/api/run', { language: 'powershell', code: 'Write-Output 1\n' });
+  assert.equal(r.data.success, false);
+  assert.match(String(r.data.stderr || r.data.error || ''), /pwsh|PowerShell Core/i);
 });
 
 test('run: files of a project can import each other', { skip: !hasPython && 'python not installed' }, async () => {
@@ -550,6 +585,19 @@ const debugProjects = {
       { name: 'lib/calc.js', content: 'function double(x) {\n  const y = x * 2;\n  return y;\n}\nmodule.exports = { double };\n' },
     ],
   },
+  typescript: {
+    entry: 'main.ts',
+    breakpoints: { 'main.ts': [5] },
+    stepTo: 'lib/calc.ts',
+    files: [
+      {
+        name: 'main.ts',
+        content:
+          'import { double } from "./lib/calc.ts";\nfunction compute(values: number[]): number {\n  let total = 0;\n  for (const v of values) {\n    total += double(v);\n  }\n  return total;\n}\nconsole.log("result", compute([1, 2, 3]));\n',
+      },
+      { name: 'lib/calc.ts', content: 'export function double(x: number): number {\n  const y = x * 2;\n  return y;\n}\n' },
+    ],
+  },
 };
 
 for (const [language, p] of Object.entries(debugProjects)) {
@@ -587,11 +635,12 @@ for (const [language, p] of Object.entries(debugProjects)) {
 const condBreakpoints = {
   python: { line: 6, condition: 'v == 2' },
   javascript: { line: 5, condition: 'v === 2' },
+  typescript: { line: 5, condition: 'v === 2' },
 };
 for (const [language, p] of Object.entries(debugProjects)) {
   test(`debugger (${language}): a conditional breakpoint stops only when the condition holds`, { skip: language === 'python' && !hasPython && 'python not installed' }, async () => {
     const entry = p.files.find((f) => f.name === p.entry)!;
-    const { line, condition } = condBreakpoints[language as 'python' | 'javascript'];
+    const { line, condition } = condBreakpoints[language as 'python' | 'javascript' | 'typescript'];
     const { data } = await api('POST', '/api/debug/start', {
       language,
       code: entry.content,
@@ -620,7 +669,7 @@ for (const [language, p] of Object.entries(debugProjects)) {
 for (const [language, p] of Object.entries(debugProjects)) {
   test(`debugger (${language}): a logpoint prints values without stopping`, { skip: language === 'python' && !hasPython && 'python not installed' }, async () => {
     const entry = p.files.find((f) => f.name === p.entry)!;
-    const { line } = condBreakpoints[language as 'python' | 'javascript'];
+    const { line } = condBreakpoints[language as 'python' | 'javascript' | 'typescript'];
     const { data } = await api('POST', '/api/debug/start', {
       language,
       code: entry.content,

@@ -42,10 +42,11 @@ export interface DebugSessionHandle {
 }
 
 /** Languages the debugger supports, by file extension */
-export function debuggableLanguage(fileName: string): 'python' | 'javascript' | null {
+export function debuggableLanguage(fileName: string): 'python' | 'javascript' | 'typescript' | null {
   const ext = fileName.split('.').pop()?.toLowerCase();
   if (ext === 'py') return 'python';
   if (ext === 'js' || ext === 'mjs' || ext === 'cjs') return 'javascript';
+  if (ext === 'ts' || ext === 'mts' || ext === 'cts') return 'typescript';
   return null;
 }
 
@@ -54,7 +55,7 @@ export function debuggableLanguage(fileName: string): 'python' | 'javascript' | 
  * debugger events (stopped / running / eval results) arrive through `onEvent`.
  */
 export async function startDebugSession(opts: {
-  language: 'python' | 'javascript';
+  language: 'python' | 'javascript' | 'typescript';
   code: string;
   files: { name: string; content: string }[];
   entry: string;

@@ -236,6 +236,7 @@ Format your output as a single markdown code block with the appropriate language
                 <option value="javascript">JavaScript (.js)</option>
                 <option value="typescript">TypeScript (.ts)</option>
                 <option value="bash">Bash / Shell (.sh)</option>
+                <option value="powershell">PowerShell (.ps1)</option>
                 <option value="sql">SQL (.sql)</option>
                 <option value="html">{t('wizard.htmlApp')}</option>
               </select>

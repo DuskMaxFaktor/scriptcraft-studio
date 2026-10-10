@@ -13,6 +13,7 @@ ScriptCraft Studio is a place to write and run scripts and programs in Python, J
 
 - Output appears in the "Terminal" tab at the bottom. When a program waits for input (`input()`), an input box shows up.
 - **Run settings** (the sliders icon in the header): command-line arguments and environment variables, e.g. tokens. They never go to the AI or to Git.
+- **Python, JavaScript, TypeScript, Bash and PowerShell** (`.ps1`) run with "Run"; arguments from run settings are passed to the script.
 - **HTML/CSS** open in the "Preview" tab, **SQL** runs in a built-in database and shows tables.
 - **Packages** (the box icon on the left): `pip` and `npm` install libraries into the project folder, not into the system.
 - **Build .exe**: "Export" → "Build .exe" turns a Python project into one Windows program.
@@ -30,7 +31,7 @@ ScriptCraft Studio is a place to write and run scripts and programs in Python, J
 
 ## Debugging
 
-`F5` starts debugging (Python and JavaScript). Breakpoints — click left of a line number; right-click for a condition or a logpoint (prints a message without stopping). `F10` step, `F11` step into, `Shift+F11` step out, `Shift+F5` stop. While paused you see the variables, can add watch expressions and hover a variable in the code.
+`F5` starts debugging (Python, JavaScript and TypeScript). Breakpoints — click left of a line number; right-click for a condition or a logpoint (prints a message without stopping). `F10` step, `F11` step into, `Shift+F11` step out, `Shift+F5` stop. While paused you see the variables, can add watch expressions and hover a variable in the code.
 
 ## Tests
 
@@ -59,9 +60,9 @@ The panel on the right. The Gemini key — the chip icon in the header → "AI m
 
 Add an `.exe` / `.dll` (or ELF / Mach-O) with "Add files from PC" or drag it into the explorer — it opens in the disassembler right away (later — from the file list at the bottom of the explorer): headers, sections, imports and assembly code. Search instructions, follow `jmp`/`call` targets, patch bytes and **rewrite an instruction in assembly** (double-click a line: `nop`, `jmp 0x401020`, `mov eax, 1` — the studio shows the bytes, pads a shorter instruction with `nop` and warns when a longer one overwrites the next ones). The original file is kept as `.bak`.
 
-## Programs on this PC
+## Programs on this PC (Windows only)
 
-The window icon in the header: installed programs (search, check, "Repair", open folder), updates through **winget**, the "Startup" tab — turn programs that start with Windows on and off.
+The window icon in the header (hidden on Linux and macOS): installed programs (search, check, "Repair", open folder), updates through **winget**, the "Startup" tab — turn programs that start with Windows on and off. Signing in to GitHub from the Git panel also opens a window on Windows only; elsewhere run `gh auth login` in a terminal.
 
 ## Backups
 

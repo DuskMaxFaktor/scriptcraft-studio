@@ -2,9 +2,13 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import { Router } from 'express';
 import { StringDecoder } from 'string_decoder';
 import { projectEnv, projectArgs } from './runconfig.ts';
+
+/** Studio install root (next to `api/`), so tsx is found even when cwd is a temp test folder. */
+const STUDIO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export interface RunResult {
   success: boolean;
@@ -69,6 +73,18 @@ const MAX_PROJECT_BYTES = 20 * 1024 * 1024;
 
 /** A run request that cannot be run as sent (reported to the user as a 400). */
 export class RunInputError extends Error {}
+
+/** Windows PowerShell, or PowerShell Core (`pwsh`) on Linux / macOS when installed. */
+function findPowerShell(): string {
+  if (isWin) return 'powershell.exe';
+  for (const p of ['pwsh', '/usr/local/bin/pwsh', '/opt/homebrew/bin/pwsh', '/usr/bin/pwsh']) {
+    const probe = spawnSync(p, ['-NoProfile', '-Command', 'exit 0'], { encoding: 'utf-8', timeout: 8000 });
+    if (probe.status === 0) return p;
+  }
+  throw new RunInputError(
+    'PowerShell Core (pwsh) is not installed. Install it from https://github.com/PowerShell/PowerShell/releases or run .ps1 scripts on Windows.'
+  );
+}
 
 /** Safe relative path inside the temp project folder, or null if the name tries to escape it. */
 function safeRelative(name: string): string | null {
@@ -168,10 +184,17 @@ export function prepareRun(language: string, code: string, files?: ProjectFileIn
   }
   if (lang === 'typescript' || lang === 'ts') {
     const filePath = write('ts');
-    // Use the studio's own tsx: "npx tsx" from the temp dir would try to download it and hang on a prompt
-    const tsxCli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    // Studio's own tsx (not cwd): tests and the portable build keep node_modules next to the studio, not in temp
+    const tsxCli = path.join(STUDIO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
     if (fs.existsSync(tsxCli)) return result('node', [tsxCli, filePath], filePath);
+    const cwdTsx = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    if (fs.existsSync(cwdTsx)) return result('node', [cwdTsx, filePath], filePath);
     return result('npx', ['--yes', 'tsx', filePath], filePath);
+  }
+  if (lang === 'powershell' || lang === 'ps1') {
+    const filePath = write('ps1');
+    // -File runs the script; project run-parameter args are appended after the path by spawnPrepared
+    return result(findPowerShell(), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', filePath], filePath);
   }
   if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
   return null;

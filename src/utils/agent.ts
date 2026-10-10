@@ -63,8 +63,8 @@ export async function runProjectFile(
     return { ok: res.success, exitCode: res.success ? 0 : 1, output: clip(`${logs.join('\n')}\n\n${tables}`.trim(), 6000) };
   }
 
-  if (!['py', 'js', 'mjs', 'ts', 'sh', 'bash'].includes(ext || '')) {
-    return { ok: false, exitCode: null, output: `"${path}" (${lang}) cannot be executed; only .py, .js, .ts, .sh and .sql files can be run.` };
+  if (!['py', 'js', 'mjs', 'ts', 'sh', 'bash', 'ps1'].includes(ext || '')) {
+    return { ok: false, exitCode: null, output: `"${path}" (${lang}) cannot be executed; only .py, .js, .ts, .ps1, .sh and .sql files can be run.` };
   }
 
   const res = await fetch('/api/run', {

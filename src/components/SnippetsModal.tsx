@@ -13,6 +13,7 @@ const LANG_LABEL: Record<string, string> = {
   html: 'HTML',
   css: 'CSS',
   shell: 'Bash',
+  powershell: 'PowerShell',
   sql: 'SQL',
   json: 'JSON',
   markdown: 'Markdown',

@@ -31,6 +31,7 @@ const MONACO_LANGUAGE: Record<FileLanguage, string> = {
   html: 'html',
   css: 'css',
   bash: 'shell',
+  powershell: 'powershell',
   sql: 'sql',
   json: 'json',
   markdown: 'markdown',

@@ -59,7 +59,13 @@ test('publish: signed-out state, then a private repository with the project and 
   await api('PUT', `/api/projects/${p.id}/run-config`, { args: '', env: [{ key: 'TOKEN', value: 'never-published' }] });
 
   process.env.FAKE_GH_LOGGED = '0';
-  assert.deepEqual((await api('GET', `${g}/github`)).data, { installed: true, account: null, remote: null, repoUrl: null });
+  assert.deepEqual((await api('GET', `${g}/github`)).data, {
+    installed: true,
+    account: null,
+    remote: null,
+    repoUrl: null,
+    loginInStudio: process.platform === 'win32',
+  });
   assert.equal((await api('POST', `${g}/github/publish`, { name: 'pub' })).status, 409);
 
   process.env.FAKE_GH_LOGGED = '1';
