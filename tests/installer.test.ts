@@ -30,6 +30,14 @@ const regValue = (name: string) => {
   const r = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf-8', windowsHide: true });
   return r.status === 0 ? r.stdout : null;
 };
+/** Same folder even when Windows returns an 8.3 short path (e.g. RUNNER~1 vs runneradmin). */
+const sameWinPath = (a: string, b: string) => {
+  try {
+    return fs.realpathSync.native(a).toLowerCase() === fs.realpathSync.native(b).toLowerCase();
+  } catch {
+    return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  }
+};
 // The uninstaller continues from a fresh copy in TEMP, which an antivirus may scan for a while
 async function waitFor(check: () => boolean, ms = 60000) {
   const end = Date.now() + ms;
@@ -83,7 +91,9 @@ test('installer: installs, updates over user data, uninstalls', { skip, timeout:
   assert.ok(fs.statSync(path.join(app, 'Uninstall.exe')).size < fs.statSync(setup).size, 'the uninstaller has no payload');
   assert.ok(fs.existsSync(path.join(links, 'ScriptCraft Studio.lnk')));
   assert.equal(regValue('DisplayName'), 'ScriptCraft Studio');
-  assert.equal(regValue('InstallLocation'), app);
+  const installLocation = regValue('InstallLocation');
+  assert.ok(installLocation, 'InstallLocation is written');
+  assert.ok(sameWinPath(installLocation, app), `InstallLocation=${installLocation} app=${app}`);
 
   // Uninstall, keeping the user's data
   spawnSync(path.join(app, 'Uninstall.exe'), ['/S', `/regkey=${regKey}`, `/shortcutdir=${links}`], { windowsHide: true });
