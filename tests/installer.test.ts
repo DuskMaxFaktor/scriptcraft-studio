@@ -8,6 +8,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
+import { fixPowerShellModulePath } from '../api/winenv.ts';
+
+// Started from PowerShell 7 (GitHub Actions, Windows Terminal), powershell.exe needs its own module path back
+fixPowerShellModulePath();
 
 const isWin = process.platform === 'win32';
 const csc = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');

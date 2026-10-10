@@ -8,6 +8,7 @@ import { notebookRouter } from './notebook.ts';
 import { appsRouter } from './apps.ts';
 import { gitRouter } from './git.ts';
 import { agentFsRouter } from './agentfs.ts';
+import { fixPowerShellModulePath } from './winenv.ts';
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -25,6 +26,9 @@ import { debugRouter } from './debug.ts';
 import { getPreviewPort } from './preview.ts';
 import { updateRouter } from './update.ts';
 import { logsRouter } from './logs.ts';
+
+// powershell.exe started by the studio must not inherit PowerShell 7's module folders (see winenv.ts)
+fixPowerShellModulePath();
 
 export const apiRouter = Router();
 

@@ -583,6 +583,36 @@ for (const [language, p] of Object.entries(debugProjects)) {
   });
 }
 
+// TEMP given by its 8.3 short name (a long or non-Latin Windows user name: "C:\Users\8E54~1\..."):
+// breakpoints still hit — Node reports the long path, the studio must compare in the same form
+test('debugger (javascript): breakpoints hit when TEMP is a short 8.3 path', { skip: process.platform !== 'win32' && 'Windows only' }, async (t) => {
+  const long = fs.mkdtempSync(path.join(os.tmpdir(), 'scriptcraft long temp name '));
+  const short = spawnSync('cmd', ['/d', '/s', '/c', `"for %I in ("${long}") do @echo %~sI"`], { encoding: 'utf-8', windowsVerbatimArguments: true }).stdout.trim();
+  if (!short || short.toLowerCase() === long.toLowerCase()) {
+    fs.rmSync(long, { recursive: true, force: true });
+    return t.skip('8.3 short names are turned off on this disk');
+  }
+  const saved = { TEMP: process.env.TEMP, TMP: process.env.TMP };
+  process.env.TEMP = process.env.TMP = short;
+  try {
+    const p = debugProjects.javascript;
+    const entry = p.files.find((f) => f.name === p.entry)!;
+    const { data } = await api('POST', '/api/debug/start', { language: 'javascript', code: entry.content, files: p.files, entry: p.entry, breakpoints: p.breakpoints });
+    assert.ok(data.runId, JSON.stringify(data));
+    const next = await debugEvents(data.runId);
+    const stop = await next();
+    assert.equal(stop.event, 'stopped', 'the breakpoint must hit, not run to the end');
+    assert.equal(stop.file, p.entry);
+    await api('POST', `/api/debug/${data.runId}/command`, { cmd: 'setBreakpoints', breakpoints: {} });
+    await api('POST', `/api/debug/${data.runId}/command`, { cmd: 'continue' });
+    assert.equal((await next()).event, 'terminated');
+  } finally {
+    process.env.TEMP = saved.TEMP;
+    process.env.TMP = saved.TMP;
+    fs.rmSync(long, { recursive: true, force: true });
+  }
+});
+
 // A conditional breakpoint stops only when its expression is true
 const condBreakpoints = {
   python: { line: 6, condition: 'v == 2' },
