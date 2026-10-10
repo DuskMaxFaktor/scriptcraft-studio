@@ -1,1 +1,5 @@
+# One line ending in the repository: LF everywhere, CRLF only where Windows tools need it
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
 *.sh text eol=lf

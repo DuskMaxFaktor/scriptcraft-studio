@@ -152,6 +152,13 @@ test('confirmations use the themed studio window: Esc / Cancel keep things as th
   await expect(dialog).toHaveCount(0);
   await row.hover();
   await row.locator('button[title="Удалить"]').click();
+  // A danger question starts on "Cancel": Enter right away does not delete
+  await expect(page.locator('[data-dialog-cancel]')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(row).toBeVisible();
+  await row.hover();
+  await row.locator('button[title="Удалить"]').click();
   await page.locator('[data-dialog-cancel]').click();
   await expect(row).toBeVisible();
   expect(await projectFile(request, project.id, 'keep.py')).toBe('x = 1');
@@ -688,6 +695,36 @@ test('report a problem: an interface error reaches the journal and the report', 
   const text = await page.locator('[data-report-text]').inputValue();
   expect(text).toContain('Кнопка не нажимается');
   expect(text).toMatch(/ScriptCraft Studio \d+\.\d+\.\d+/);
+});
+
+test('risky code: Ctrl+Enter while the warning is open does not start a second run', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  await openStudio(page, request, 'Двойной запуск', [
+    { name: 'clean.py', content: 'import shutil\nshutil.rmtree("no_such_folder_4712", ignore_errors=True)\nprint("ran once")\n', isEntry: true },
+  ]);
+  await runButton(page).click();
+  await expect(page.locator('[data-dialog="confirm"]')).toBeVisible();
+  await page.keyboard.press('Control+Enter');
+  await page.keyboard.press('Control+Enter');
+  await page.locator('[data-dialog-ok]').click();
+  await expect(output(page)).toContainText('ran once', { timeout: 20000 });
+  await page.waitForTimeout(1500);
+  await expect(page.locator('[data-dialog="confirm"]')).toHaveCount(0); // no second question queued
+  await expect(output(page).getByText('ran once')).toHaveCount(1);
+});
+
+test('terminal: a line break split between two output chunks is one line break', async ({ page, request }) => {
+  test.skip(!hasPython, 'python not installed');
+  const code = 'import sys, time\nsys.stdout.buffer.write(b"first\\r"); sys.stdout.buffer.flush()\ntime.sleep(0.4)\nsys.stdout.buffer.write(b"\\nsecond\\r\\n"); sys.stdout.buffer.flush()\n';
+  await openStudio(page, request, 'Переводы строк', [{ name: 'crlf.py', content: code, isEntry: true }]);
+  await runButton(page).click();
+  await expect(output(page)).toContainText('second', { timeout: 20000 });
+  // The messages of the terminal lines (the second span of each row; the first is the time)
+  const messages = await output(page).locator(':scope > div > span:nth-child(2)').allInnerTexts();
+  const i = messages.indexOf('first');
+  expect(i, JSON.stringify(messages)).toBeGreaterThanOrEqual(0);
+  // "first" and "second" on neighbouring lines: no empty line between them
+  expect(messages[i + 1], JSON.stringify(messages)).toBe('second');
 });
 
 test('risky code: a warning before the run, Cancel keeps it from running, the answer is remembered', async ({ page, request }) => {

@@ -58,13 +58,17 @@ export function attachRunStream(runId: string, upsertLog: (entry: LogEntry) => v
 
   // Per-stream assembly of complete lines; the unfinished tail is shown live as a "partial" line
   const streams = {
-    stdout: { buf: '', partialId: null as string | null, type: 'log' as LogEntry['type'] },
-    stderr: { buf: '', partialId: null as string | null, type: 'error' as LogEntry['type'] },
+    stdout: { buf: '', partialId: null as string | null, type: 'log' as LogEntry['type'], cr: false },
+    stderr: { buf: '', partialId: null as string | null, type: 'error' as LogEntry['type'], cr: false },
   };
 
   const write = (name: 'stdout' | 'stderr', chunk: string) => {
     const s = streams[name];
-    const lines = (s.buf + chunk.replace(/\r\n?/g, '\n')).split('\n');
+    // A "\r\n" split between two chunks must stay one line break: keep a trailing "\r" for the next chunk
+    let text = (s.cr ? '\r' : '') + chunk;
+    s.cr = text.endsWith('\r');
+    if (s.cr) text = text.slice(0, -1);
+    const lines = (s.buf + text.replace(/\r\n?/g, '\n')).split('\n');
     s.buf = lines.pop() ?? '';
     for (const line of lines) {
       upsertLog({ id: s.partialId || generateId(), type: s.type, message: line, timestamp: getTimestamp() });
@@ -137,11 +141,17 @@ export function attachRunStream(runId: string, upsertLog: (entry: LogEntry) => v
     } else {
       upsertLog({ id: generateId(), type: 'info', message: `› ${text}`, timestamp: getTimestamp() });
     }
-    await fetch(`/api/run/${encodeURIComponent(runId)}/stdin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: text + '\n' }),
-    });
+    try {
+      const res = await fetch(`/api/run/${encodeURIComponent(runId)}/stdin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: text + '\n' }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      // The program has just finished (or the studio server is restarting): say the input went nowhere
+      upsertLog({ id: generateId(), type: 'warn', message: t('run.inputLost'), timestamp: getTimestamp() });
+    }
   };
 
   const stop = async () => {

@@ -246,6 +246,7 @@ const en = {
   'quick.none': 'No matching files',
 
   'hotkeys.title': 'Keyboard shortcuts',
+  'run.inputLost': 'The input was not delivered: the program has already finished.',
   'app.binariesImported': 'Added to the project folder ({count}): {files}',
   'risk.title': '«{name}» does something that is hard to undo or typical of malicious programs:',
   'risk.agentTitle': 'Careful: this code',
@@ -1189,6 +1190,7 @@ const ru: Record<Key, string> = {
   'quick.none': 'Файлы не найдены',
 
   'hotkeys.title': 'Горячие клавиши',
+  'run.inputLost': 'Ввод не доставлен: программа уже завершилась.',
   'app.binariesImported': 'Добавлено в папку проекта ({count}): {files}',
   'risk.title': '«{name}» делает то, что трудно отменить или что типично для вредоносных программ:',
   'risk.agentTitle': 'Осторожно: этот код',

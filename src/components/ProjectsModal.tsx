@@ -37,7 +37,7 @@ interface ProjectsModalProps {
   currentProjectId: string | null;
   onOpenProject: (id: string) => void;
   onCreateProject: (name: string, templateId: string | null) => Promise<void>;
-  onImportAsProject: (name: string, files: ProjectFilePayload[]) => Promise<void>;
+  onImportAsProject: (name: string, files: ProjectFilePayload[], binaries?: { name: string; data: Blob }[]) => Promise<void>;
   onProjectRenamed: (id: string, name: string) => void;
   onProjectDeleted: (id: string) => void;
 }
@@ -144,14 +144,14 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
       const picked = pickedFromFileList(fileList);
       // A picked folder becomes the project itself: strip its name from the paths and use it as the project name
       const rootFolder = commonRootFolder(picked.map((p) => p.path));
-      const { files, skipped } = await readImportedFiles(picked, [], true);
-      if (files.length === 0) throw new Error(t('projects.importEmpty'));
+      const { files, skipped, binaries } = await readImportedFiles(picked, [], true);
+      if (files.length === 0 && binaries.length === 0) throw new Error(t('projects.importEmpty'));
       const first = fileList[0].name;
       const name =
         newName.trim() ||
         rootFolder ||
         (first.toLowerCase().endsWith('.zip') ? first.replace(/\.zip$/i, '') : first.replace(/\.[^.]+$/, ''));
-      await onImportAsProject(name, files);
+      await onImportAsProject(name, files, binaries);
       if (skipped.length) await showAlert(t('projects.skipped', { files: skipped.slice(0, 30).join(', ') }));
       onClose();
     });
