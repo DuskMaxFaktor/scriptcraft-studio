@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { Play, Plus, RotateCcw, Trash2, ChevronUp, ChevronDown, Loader2, Code2, FileText, Circle, Square, Variable, Download, RefreshCw, X } from 'lucide-react';
 import { useI18n } from '../i18n.ts';
 import { useTheme } from '../theme.ts';
 import '../monacoSetup.ts';
-import { MarkdownPreview, previewToHtml } from './MarkdownPreview.tsx';
+import { previewToHtml } from '../utils/markdownHtml.ts';
+// Loaded when the first text cell is shown
+const MarkdownPreview = lazy(() => import('./MarkdownPreview.tsx').then((m) => ({ default: m.MarkdownPreview })));
 
 // Jupyter-style Python notebook. Cells (code / markdown) run against one long-lived kernel that keeps
 // its state between cells. The file is the standard .ipynb JSON, so it opens in Jupyter/VS Code too.
@@ -431,7 +433,12 @@ export const NotebookView: React.FC<Props> = ({ content, fileName = 'notebook.ip
     for (;;) {
       await new Promise((r) => setTimeout(r, 100));
       const box = exportRef.current;
-      const pending = box ? [...box.querySelectorAll('[data-mermaid]')].some((d) => !d.querySelector('svg') && !d.querySelector('pre')) : true;
+      const previews = box ? box.querySelectorAll('[data-md-preview]').length : 0;
+      const pending = box
+        ? previews < box.querySelectorAll('[data-export-md]').length ||
+          !!box.querySelector('[data-md-math="loading"]') ||
+          [...box.querySelectorAll('[data-mermaid]')].some((d) => !d.querySelector('svg') && !d.querySelector('pre'))
+        : true;
       if (box && !pending) break;
       if (Date.now() - started > 5000) break;
     }
@@ -559,7 +566,11 @@ export const NotebookView: React.FC<Props> = ({ content, fileName = 'notebook.ip
             <div className="flex-1 min-w-0 rounded-lg border border-slate-800 overflow-hidden">
               {cell.type === 'markdown' && !cell.edit ? (
                 <div onDoubleClick={() => update(cell.id, { edit: true })} className="min-h-[2rem] cursor-text" data-md-cell>
-                  {cell.source.trim() ? <MarkdownPreview content={cell.source} projectId={projectId || undefined} /> : <div className="p-3 text-slate-500 text-xs italic">{t('nb.emptyMd')}</div>}
+                  {cell.source.trim() ? (
+                    <Suspense fallback={<div className="p-3 min-h-[2rem]" />}>
+                      <MarkdownPreview content={cell.source} projectId={projectId || undefined} />
+                    </Suspense>
+                  ) : <div className="p-3 text-slate-500 text-xs italic">{t('nb.emptyMd')}</div>}
                 </div>
               ) : cell.type === 'code' ? (
                 <div className="bg-deep/40">
@@ -662,7 +673,9 @@ export const NotebookView: React.FC<Props> = ({ content, fileName = 'notebook.ip
             .filter((c) => c.type === 'markdown')
             .map((c) => (
               <div key={c.id} data-export-md>
-                <MarkdownPreview content={c.source} projectId={projectId || undefined} />
+                <Suspense fallback={null}>
+                  <MarkdownPreview content={c.source} projectId={projectId || undefined} />
+                </Suspense>
               </div>
             ))}
         </div>

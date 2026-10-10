@@ -295,6 +295,22 @@ test('markdown preview renders the .md file and toggles off', async ({ page, req
   await expect(preview).toBeHidden();
 });
 
+test('a plain code file does not load the Markdown renderer or KaTeX; a file with formulas does', async ({ page, request }) => {
+  const loaded: string[] = [];
+  page.on('request', (r) => loaded.push(r.url().split('/').pop() || ''));
+  await openStudio(page, request, 'Лёгкий', [
+    { name: 'main.py', content: 'print(1)', isEntry: true },
+    { name: 'notes.md', language: 'markdown', content: '# Заметки\n\nПлощадь $S = \\pi r^2$\n' },
+  ]);
+  await page.waitForTimeout(1500);
+  expect(loaded.filter((u) => /katex|MarkdownPreview/i.test(u))).toEqual([]);
+  await sidebarFile(page, 'notes.md').click();
+  const preview = page.locator('[data-md-preview]');
+  await expect(preview.locator('h1')).toHaveText('Заметки');
+  await expect(preview.locator('.katex').first()).toBeVisible();
+  expect(loaded.some((u) => /katex/i.test(u))).toBeTruthy();
+});
+
 test('markdown preview: formulas (KaTeX), mermaid diagrams and export to HTML', async ({ page, request }) => {
   const md = '# Отчёт\n\nФормула $E = mc^2$ и блок:\n\n$$\n\\int_0^1 x\\,dx\n$$\n\n```mermaid\ngraph TD\n  A[Старт] --> B[Финиш]\n```\n';
   await openStudio(page, request, 'Формулы', [{ name: 'report.md', language: 'markdown', isEntry: true, content: md }]);

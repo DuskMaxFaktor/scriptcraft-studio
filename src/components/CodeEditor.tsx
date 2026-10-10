@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, Suspense, lazy } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import {
   Copy,
@@ -19,7 +19,9 @@ import {
   Eye,
   FileDown,
 } from 'lucide-react';
-import { MarkdownPreview, previewToHtml } from './MarkdownPreview.tsx';
+import { previewToHtml } from '../utils/markdownHtml.ts';
+// The Markdown renderer loads only when a Markdown file is shown
+const MarkdownPreview = lazy(() => import('./MarkdownPreview.tsx').then((m) => ({ default: m.MarkdownPreview })));
 import type { Breakpoint } from '../utils/debugClient.ts';
 import { FileItem, FileLanguage } from '../types.ts';
 import { useI18n } from '../i18n.ts';
@@ -139,7 +141,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     const started = Date.now();
     for (;;) {
       const el = mdPreviewRef.current?.querySelector('[data-md-preview]');
-      const pending = el ? [...el.querySelectorAll('[data-mermaid]')].some((d) => !d.querySelector('svg') && !d.querySelector('pre')) : true;
+      const pending = el
+        ? el.getAttribute('data-md-math') === 'loading' || [...el.querySelectorAll('[data-mermaid]')].some((d) => !d.querySelector('svg') && !d.querySelector('pre'))
+        : true;
       if (el && !pending) break;
       if (Date.now() - started > 5000) break;
       await new Promise((r) => setTimeout(r, 100));
@@ -666,7 +670,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       </div>
         {showMdPreview && (
           <div ref={mdPreviewRef} className="w-1/2 min-h-0 overflow-auto bg-canvas">
-            <MarkdownPreview content={activeFile.content} projectId={projectId || undefined} />
+            <Suspense fallback={null}>
+              <MarkdownPreview content={activeFile.content} projectId={projectId || undefined} />
+            </Suspense>
           </div>
         )}
       </div>
