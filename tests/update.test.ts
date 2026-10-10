@@ -76,9 +76,10 @@ test('compareVersions', async () => {
 
 test('update settings: the repository is checked and normalized', async () => {
   const st = (await api('GET', '/api/update')).data;
-  assert.equal(st.repo, '');
+  assert.equal(st.repo, 'DuskMaxFaktor/scriptcraft-studio'); // the studio's own releases by default
   assert.equal(st.version, JSON.parse(fs.readFileSync(path.join(studioRoot, 'package.json'), 'utf-8')).version);
-  assert.equal((await api('POST', '/api/update/check')).status, 400); // nothing set yet
+  assert.equal((await api('PUT', '/api/update', { repo: '' })).data.repo, '');
+  assert.equal((await api('POST', '/api/update/check')).status, 400); // turned off
   assert.equal((await api('PUT', '/api/update', { repo: 'not a repo' })).status, 400);
   assert.equal((await api('PUT', '/api/update', { repo: 'https://github.com/me/studio.git' })).data.repo, 'me/studio');
   assert.equal((await api('GET', '/api/update')).data.repo, 'me/studio');

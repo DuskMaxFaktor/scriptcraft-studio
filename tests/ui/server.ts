@@ -15,6 +15,9 @@ fs.writeFileSync(
   JSON.stringify({ ollama: { enabled: false, baseUrl: 'http://127.0.0.1:11434' }, backups: { enabled: false, keep: 7, dir: path.join(tmp, 'backups') } })
 );
 
+// Update checks never reach the real GitHub (a closed local port: the daily check fails quietly)
+process.env.SCRIPTCRAFT_UPDATE_API = 'http://127.0.0.1:9';
+
 // GitHub: a fake GitHub CLI, so UI tests never create repositories in a real account
 process.env.SCRIPTCRAFT_GH_SCRIPT = path.join(studioRoot, 'tests', 'fixtures', 'fake-gh.mjs');
 process.env.FAKE_GH_LOGGED = '1';

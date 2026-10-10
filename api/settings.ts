@@ -25,7 +25,8 @@ const DEFAULTS: AiSettings = {
   completion: { enabled: false, model: '' },
   custom: { enabled: false, name: 'My server', baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', models: [] },
   backups: { enabled: true, keep: 7, dir: '' },
-  update: { repo: '', autoCheck: true },
+  // The studio's own releases: installed copies update themselves from here
+  update: { repo: 'DuskMaxFaktor/scriptcraft-studio', autoCheck: true },
 };
 
 export function readSettings(): AiSettings {

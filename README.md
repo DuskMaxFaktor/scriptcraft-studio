@@ -4,11 +4,13 @@
 
 ## Установка
 
+**Скачать:** [последний релиз](https://github.com/DuskMaxFaktor/scriptcraft-studio/releases/latest).
+
 **Установщик** — `ScriptCraftStudio-Setup.exe`:
 
 1. Запустите его. Права администратора не нужны: студия ставится в `%LOCALAPPDATA%\Programs\ScriptCraftStudio`, появляется в меню «Пуск» и в «Установленных приложениях».
 2. Node.js и Python 3.14 (с pip, pytest, Ruff, PyInstaller) уже внутри — ставить ничего не нужно.
-3. Обновления: «i» в шапке → «Обновления». Проекты, ключи и настройки при обновлении остаются.
+3. Обновления приходят сами: раз в день студия смотрит релизы этого репозитория («i» в шапке → «Обновления»). Проекты, ключи и настройки при обновлении остаются.
 4. Удаление: «Параметры Windows → Приложения» или `Uninstall.exe` в папке студии. Студия спросит, удалять ли ваши проекты.
 
 **Портативная версия** — `ScriptCraftStudio-portable.zip`: распакуйте и запустите `ScriptCraftStudio.exe`.
@@ -86,3 +88,7 @@ powershell -ExecutionPolicy Bypass -File scripts\clean_pc_check.ps1
 Для автообновления опубликуйте на GitHub релиз с тегом `vX.Y.Z` и файлами `ScriptCraftStudio-Setup.exe` и `ScriptCraftStudio-Setup.exe.sha256`.
 
 Лицензии сторонних компонентов — [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Лицензия
+
+[MIT](LICENSE) © 2026 DuskMaxFaktor. Ошибки и предложения — в [Issues](https://github.com/DuskMaxFaktor/scriptcraft-studio/issues) (в студии: «i» → «Сообщить о проблеме»).

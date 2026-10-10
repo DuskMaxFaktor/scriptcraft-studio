@@ -1,7 +1,9 @@
 {
-  "name": "react-example",
+  "name": "scriptcraft-studio",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
+  "license": "MIT",
+  "repository": "github:DuskMaxFaktor/scriptcraft-studio",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=127.0.0.1 --strictPort",
