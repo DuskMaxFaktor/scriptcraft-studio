@@ -1,5 +1,7 @@
 # ScriptCraft Studio
 
+[![CI](https://github.com/DuskMaxFaktor/scriptcraft-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/DuskMaxFaktor/scriptcraft-studio/actions/workflows/ci.yml)
+
 Среда для скриптов и программ на Python, JavaScript/TypeScript, HTML/CSS, SQL, PowerShell и других языках — с ИИ-помощником, отладчиком, тестами, Git, блокнотами Jupyter и дизассемблером. Работает на вашем компьютере (Windows 10/11).
 
 ## Установка
@@ -75,6 +77,8 @@ npm run test:ui    # интерфейс (Playwright), ~3 мин
 ```
 
 Тесты работают во временных папках и не трогают реальные проекты, реестр, GitHub и папку «Документы».
+
+На GitHub то же самое запускается само (GitHub Actions, `.github/workflows/ci.yml`) для каждого pull request и каждого коммита в `main`, на Windows: типы, тесты сервера и интерфейса. При падении UI-теста скриншоты и трасса лежат в артефакте `playwright-report` на странице запуска.
 
 ### Сборка релиза
 
