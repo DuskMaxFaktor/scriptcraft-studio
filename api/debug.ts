@@ -189,27 +189,35 @@ function startNode(
       ws.send(JSON.stringify({ id, method, params }));
     });
 
+  const underRoot = (absPath: string): string | null => {
+    const absLower = absPath.toLowerCase();
+    const rootPosix = rootAbsLower.replace(/\\/g, '/');
+    const absPosix = absLower.replace(/\\/g, '/');
+    if (absLower === rootAbsLower || absLower.startsWith(rootAbsLower + path.sep)) {
+      return path.relative(rootAbs, absPath).replace(/\\/g, '/');
+    }
+    if (absPosix === rootPosix || absPosix.startsWith(rootPosix + '/')) {
+      return path.relative(rootAbs, absPath).replace(/\\/g, '/');
+    }
+    return null;
+  };
+  /** Map a CDP script URL (file:// or bare path) to a project-relative path. */
   const relOf = (url: string): string | null => {
     if (!url) return null;
+    try {
+      if (/^file:/i.test(url)) return underRoot(fileURLToPath(url));
+      if (path.isAbsolute(url) || /^[a-zA-Z]:[\\/]/.test(url)) return underRoot(path.resolve(url));
+    } catch {
+      /* not a filesystem url */
+    }
+    // Last resort: prefix match on the file:// form (same as older Node builds)
     const lower = url.toLowerCase();
     if (lower.startsWith(rootUrl)) {
       try {
-        return path.relative(root, fileURLToPath(url)).replace(/\\/g, '/');
+        return underRoot(fileURLToPath(url));
       } catch {
         return null;
       }
-    }
-    // --experimental-strip-types: script url is a bare absolute path (not file://)
-    try {
-      const abs = path.resolve(url);
-      const absLower = abs.toLowerCase();
-      const under =
-        absLower === rootAbsLower ||
-        absLower.startsWith(rootAbsLower + path.sep) ||
-        absLower.startsWith(rootAbsLower.replace(/\\/g, '/') + '/');
-      if (under) return path.relative(rootAbs, abs).replace(/\\/g, '/');
-    } catch {
-      /* not a path */
     }
     return null;
   };
@@ -227,9 +235,14 @@ function startNode(
       const url = pathToFileURL(abs).href;
       for (const bp of bps) {
         const extra = bp.log ? { condition: nodeLogCondition(bp.log) } : bp.condition ? { condition: bp.condition } : {};
-        const targets: Record<string, unknown>[] = [{ urlRegex: `^${ciPattern(url)}$` }];
-        // TypeScript strip-types binds breakpoints to the bare path string
-        if (pathStyleScripts) targets.push({ url: abs });
+        // Node may report the same file as file:// (urlRegex) or as a bare path (url: abs),
+        // especially with --experimental-strip-types and on some CI hosts — set both.
+        const targets: Record<string, unknown>[] = [{ urlRegex: `^${ciPattern(url)}$` }, { url: abs }];
+        if (pathStyleScripts) {
+          // Forward-slash form of the Windows path, seen on some Node builds
+          const absPosix = abs.replace(/\\/g, '/');
+          if (absPosix !== abs) targets.push({ url: absPosix });
+        }
         for (const target of targets) {
           const r = await send('Debugger.setBreakpointByUrl', {
             lineNumber: bp.line - 1,
@@ -266,7 +279,7 @@ function startNode(
       await send('Debugger.stepOut');
       return;
     }
-    const top = frames.find((f) => relOf(frameUrl(f)));
+    const top = frames.find((f) => relOf(frameUrl(f))) || frames[0];
     const locals: DebugVariable[] = [];
     const globals: DebugVariable[] = [];
     for (const scope of top.scopeChain as any[]) {

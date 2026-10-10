@@ -52,10 +52,20 @@ try {
 Remove-Item $stub -ErrorAction SilentlyContinue
 
 # Optional Authenticode signature (SCRIPTCRAFT_SIGN_THUMBPRINT). SHA-256 digest is computed after signing.
-. (Join-Path $Root "scripts\sign_exe.ps1")
-Sign-ScriptCraftExe -Path $Out
+$signScript = Join-Path $Root "scripts\sign_exe.ps1"
+if (Test-Path $signScript) {
+    . $signScript
+    Sign-ScriptCraftExe -Path $Out
+}
 
-$hash = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLower()
+# Prefer .NET hashing: some CI PowerShell hosts lack Get-FileHash after script imports
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $fs = [System.IO.File]::OpenRead($Out)
+    try {
+        $hash = ([BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLowerInvariant()
+    } finally { $fs.Dispose() }
+} finally { $sha.Dispose() }
 Set-Content -Path "$Out.sha256" -Value "$hash  $(Split-Path $Out -Leaf)" -Encoding ascii -NoNewline
 $mb = [math]::Round((Get-Item $Out).Length / 1MB, 1)
 Write-Host "[SUCCESS] $Out ($mb MB)" -ForegroundColor Green
