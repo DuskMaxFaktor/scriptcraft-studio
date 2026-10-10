@@ -234,10 +234,40 @@ namespace ScriptCraftSetup {
                 Type lt = lnk.GetType();
                 lt.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { target });
                 lt.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { Path.GetDirectoryName(target) });
-                lt.InvokeMember("IconLocation", BindingFlags.SetProperty, null, lnk, new object[] { target + ",0" });
+                try {
+                    lt.InvokeMember("IconLocation", BindingFlags.SetProperty, null, lnk, new object[] { target + ",0" });
+                } catch {
+                    // Some CI/host targets (e.g. copied where.exe) reject IconLocation; shortcut still works.
+                }
                 lt.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { AppName });
                 lt.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
-            } catch (Exception e) { Log("shortcut failed " + lnkPath + " " + e.Message); }
+                if (!File.Exists(lnkPath)) throw new IOException("shortcut file was not created");
+            } catch (Exception e) {
+                Log("shortcut COM failed " + lnkPath + " " + e.Message + "; trying PowerShell fallback");
+                string script = null;
+                try {
+                    Directory.CreateDirectory(Path.GetDirectoryName(lnkPath));
+                    // Fallback for hosts where in-process WScript.Shell COM is flaky (GitHub Actions).
+                    script = Path.Combine(Path.GetTempPath(), "sc-lnk-" + Guid.NewGuid().ToString("n") + ".ps1");
+                    Func<string, string> q = s => "'" + (s ?? "").Replace("'", "''") + "'";
+                    // No BOM: .NET Encoding.UTF8 writes a BOM that can break -File on some hosts.
+                    File.WriteAllText(script,
+                        "$w = New-Object -ComObject WScript.Shell" + Environment.NewLine +
+                        "$l = $w.CreateShortcut(" + q(lnkPath) + ")" + Environment.NewLine +
+                        "$l.TargetPath = " + q(target) + Environment.NewLine +
+                        "$l.WorkingDirectory = " + q(Path.GetDirectoryName(target)) + Environment.NewLine +
+                        "$l.Description = " + q(AppName) + Environment.NewLine +
+                        "$l.Save()" + Environment.NewLine, new UTF8Encoding(false));
+                    string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+                    if (!File.Exists(ps)) ps = "powershell.exe";
+                    var psi = new ProcessStartInfo(ps, "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    using (var p = Process.Start(psi)) { if (p != null) p.WaitForExit(20000); }
+                    if (!File.Exists(lnkPath)) Log("shortcut fallback also failed " + lnkPath);
+                } catch (Exception e2) { Log("shortcut fallback failed " + lnkPath + " " + e2.Message); }
+                finally { try { if (script != null) File.Delete(script); } catch { } }
+            }
         }
 
         static void Register(string exe) {

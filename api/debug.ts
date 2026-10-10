@@ -67,8 +67,8 @@ export type DebugEvent =
   | { event: 'error'; message: string };
 
 interface Adapter {
-  command(cmd: 'continue' | 'next' | 'step' | 'out' | 'stop'): void;
-  setBreakpoints(bps: Breakpoints): void;
+  command(cmd: 'continue' | 'next' | 'step' | 'out' | 'stop'): void | Promise<void>;
+  setBreakpoints(bps: Breakpoints): void | Promise<void>;
   evaluate(expr: string): void;
   dispose(): void;
 }
@@ -189,15 +189,17 @@ function startNode(
       ws.send(JSON.stringify({ id, method, params }));
     });
 
+  const normalizeFs = (p: string) => path.resolve(p.replace(/^\\\\\?\\/, ''));
   const underRoot = (absPath: string): string | null => {
-    const absLower = absPath.toLowerCase();
+    const abs = normalizeFs(absPath);
+    const absLower = abs.toLowerCase();
     const rootPosix = rootAbsLower.replace(/\\/g, '/');
     const absPosix = absLower.replace(/\\/g, '/');
     if (absLower === rootAbsLower || absLower.startsWith(rootAbsLower + path.sep)) {
-      return path.relative(rootAbs, absPath).replace(/\\/g, '/');
+      return path.relative(rootAbs, abs).replace(/\\/g, '/');
     }
     if (absPosix === rootPosix || absPosix.startsWith(rootPosix + '/')) {
-      return path.relative(rootAbs, absPath).replace(/\\/g, '/');
+      return path.relative(rootAbs, abs).replace(/\\/g, '/');
     }
     return null;
   };
@@ -206,7 +208,7 @@ function startNode(
     if (!url) return null;
     try {
       if (/^file:/i.test(url)) return underRoot(fileURLToPath(url));
-      if (path.isAbsolute(url) || /^[a-zA-Z]:[\\/]/.test(url)) return underRoot(path.resolve(url));
+      if (path.isAbsolute(url) || /^[a-zA-Z]:[\\/]/.test(url)) return underRoot(url);
     } catch {
       /* not a filesystem url */
     }
@@ -225,24 +227,52 @@ function startNode(
   const ciPattern = (t: string) =>
     t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[a-z]/gi, (ch) => `[${ch.toLowerCase()}${ch.toUpperCase()}]`);
 
-  const applyBreakpoints = async (b: Breakpoints) => {
+  /** CDP scriptId → project-relative path (filled from scriptParsed). */
+  const scriptRels = new Map<string, string>();
+  /** Serialize breakpoint updates so clear+continue cannot race leftover hits. */
+  let applyChain: Promise<void> = Promise.resolve();
+
+  const bpExtra = (bp: Breakpoint) =>
+    bp.log ? { condition: nodeLogCondition(bp.log) } : bp.condition ? { condition: bp.condition } : {};
+
+  /** Bind by scriptId once V8 has parsed the file (most reliable on CI / Node 22+). */
+  const applyBreakpointsForScript = async (scriptId: string, rel: string) => {
+    const list = currentBps[rel];
+    if (!list?.length) return;
+    for (const bp of list) {
+      const r = await send('Debugger.setBreakpoint', {
+        location: { scriptId, lineNumber: bp.line - 1 },
+        ...bpExtra(bp),
+      });
+      if (r?.breakpointId) breakpointIds.push(r.breakpointId);
+    }
+  };
+
+  const applyBreakpointsInner = async (b: Breakpoints) => {
     currentBps = b;
     for (const id of breakpointIds) await send('Debugger.removeBreakpoint', { breakpointId: id });
     breakpointIds = [];
-    for (const [rel, bps] of Object.entries(b)) {
+    for (const [rel, list] of Object.entries(b)) {
+      if (!list?.length) continue;
+      // Prefer scriptId when the file is already parsed — avoids duplicate URL hits and clear races.
+      const idsForRel = [...scriptRels].filter(([, r]) => r === rel).map(([id]) => id);
+      if (idsForRel.length) {
+        for (const scriptId of idsForRel) await applyBreakpointsForScript(scriptId, rel);
+        continue;
+      }
       const abs = path.join(root, rel);
-      // match the file by its absolute file:// URL (case-insensitive on Windows)
       const url = pathToFileURL(abs).href;
-      for (const bp of bps) {
-        const extra = bp.log ? { condition: nodeLogCondition(bp.log) } : bp.condition ? { condition: bp.condition } : {};
-        // Node may report the same file as file:// (urlRegex) or as a bare path (url: abs),
-        // especially with --experimental-strip-types and on some CI hosts — set both.
-        const targets: Record<string, unknown>[] = [{ urlRegex: `^${ciPattern(url)}$` }, { url: abs }];
-        if (pathStyleScripts) {
-          // Forward-slash form of the Windows path, seen on some Node builds
-          const absPosix = abs.replace(/\\/g, '/');
-          if (absPosix !== abs) targets.push({ url: absPosix });
-        }
+      const absPosix = abs.replace(/\\/g, '/');
+      for (const bp of list) {
+        const extra = bpExtra(bp);
+        // Node may report file://, bare Windows paths, or forward-slash paths (GHA / strip-types).
+        const targets: Record<string, unknown>[] = [
+          { urlRegex: `^${ciPattern(url)}$` },
+          { url: abs },
+          { urlRegex: `^${ciPattern(absPosix)}$` },
+        ];
+        if (absPosix !== abs) targets.push({ url: absPosix });
+        if (pathStyleScripts && absPosix === abs) targets.push({ url: absPosix });
         for (const target of targets) {
           const r = await send('Debugger.setBreakpointByUrl', {
             lineNumber: bp.line - 1,
@@ -253,6 +283,11 @@ function startNode(
         }
       }
     }
+  };
+
+  const applyBreakpoints = (b: Breakpoints) => {
+    applyChain = applyChain.then(() => applyBreakpointsInner(b)).catch(() => undefined);
+    return applyChain;
   };
 
   const describe = (v: any): { value: string; type: string } => {
@@ -267,6 +302,8 @@ function startNode(
     // --inspect-brk stops before the first line: skip it, the studio runs until the first breakpoint
     if (!entryPauseSkipped && p.reason === 'Break on start') {
       entryPauseSkipped = true;
+      // Late scriptParsed rebinds must finish before resume or CI gets terminated instead of stopped.
+      await applyChain;
       await send('Debugger.resume');
       return;
     }
@@ -321,8 +358,20 @@ function startNode(
       if (data.id && callbacks.has(data.id)) {
         callbacks.get(data.id)!(data.result);
         callbacks.delete(data.id);
-      } else if (data.method === 'Debugger.scriptParsed') scriptUrls.set(data.params.scriptId, data.params.url);
-      else if (data.method === 'Debugger.paused') onPaused(data.params);
+      } else if (data.method === 'Debugger.scriptParsed') {
+        const { scriptId, url } = data.params || {};
+        if (scriptId && url) {
+          scriptUrls.set(scriptId, url);
+          const rel = relOf(url);
+          if (rel) {
+            scriptRels.set(scriptId, rel);
+            // Refresh so URL-fallback BPs are replaced by scriptId binds (CI path mismatches).
+            if (currentBps[rel]?.length) {
+              applyChain = applyChain.then(() => applyBreakpointsInner(currentBps)).catch(() => undefined);
+            }
+          }
+        }
+      } else if (data.method === 'Debugger.paused') onPaused(data.params);
       else if (data.method === 'Debugger.resumed') emit(s, { event: 'running' });
     };
     ws.onopen = async () => {
@@ -330,6 +379,9 @@ function startNode(
       await send('Debugger.enable');
       // never stop inside Node's own code or dependencies when stepping
       await send('Debugger.setBlackboxPatterns', { patterns: ['^node:', 'node_modules'] });
+      // Debugger.enable re-emits scriptParsed for already-loaded scripts before its response;
+      // one tick lets those handlers fill scriptRels before we bind + resume.
+      await new Promise((r) => setImmediate(r));
       await applyBreakpoints(currentBps);
       await send('Runtime.runIfWaitingForDebugger');
     };
@@ -337,14 +389,15 @@ function startNode(
   });
 
   const adapter: Adapter = {
-    command: (cmd) => {
+    command: async (cmd) => {
       const map = { continue: 'Debugger.resume', next: 'Debugger.stepOver', step: 'Debugger.stepInto', out: 'Debugger.stepOut' } as const;
       // "stop" is done by the run session (POST /api/run/:id/stop), which kills the whole process tree
-      if (cmd !== 'stop') send(map[cmd]);
+      if (cmd === 'stop') return;
+      // Finish pending breakpoint updates before resume/step so cleared BPs cannot still fire.
+      await applyChain;
+      await send(map[cmd]);
     },
-    setBreakpoints: (b) => {
-      applyBreakpoints(b);
-    },
+    setBreakpoints: (b) => applyBreakpoints(b),
     evaluate: async (expr) => {
       const r = await send('Debugger.evaluateOnCallFrame', { callFrameId: s.lastFrameId, expression: expr, returnByValue: false });
       if (!r) return emit(s, { event: 'evalResult', expr, error: 'Not paused' });
@@ -435,16 +488,16 @@ debugRouter.get('/:id/events', (req, res) => {
   });
 });
 
-debugRouter.post('/:id/command', (req, res) => {
+debugRouter.post('/:id/command', async (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s?.adapter) return res.status(404).json({ error: 'Debug session not found' });
   const cmd = req.body?.cmd;
   if (cmd === 'setBreakpoints') {
-    s.adapter.setBreakpoints(normalizeBreakpoints(req.body?.breakpoints));
+    await Promise.resolve(s.adapter.setBreakpoints(normalizeBreakpoints(req.body?.breakpoints)));
   } else if (cmd === 'eval') {
     s.adapter.evaluate(String(req.body?.expr || '').slice(0, 2000));
   } else if (['continue', 'next', 'step', 'out', 'stop'].includes(cmd)) {
-    s.adapter.command(cmd);
+    await Promise.resolve(s.adapter.command(cmd));
   } else {
     return res.status(400).json({ error: 'Unknown command' });
   }
