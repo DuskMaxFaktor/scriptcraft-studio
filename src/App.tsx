@@ -505,11 +505,27 @@ export default function App() {
   }, [activeFile, entryFile, isRunning, addLog, upsertLog, files]);
 
   // Agent mode: create or overwrite project files proposed by the AI
-  const handleApplyAgentFiles = (changes: { name: string; content: string }[]) => {
+  const handleApplyAgentFiles = (
+    changes: { name: string; content: string }[],
+    moves?: { deletes: string[]; renames: { from: string; to: string }[] }
+  ) => {
     forceSnapshotRef.current = true;
     const now = Date.now();
-    const next = filesRef.current.slice();
+    let next = filesRef.current.slice();
     let lastTouchedId = '';
+    // Renames keep the file (same tab, new name); deleted files stay restorable from the file history
+    for (const r of moves?.renames || []) {
+      const idx = next.findIndex((f) => f.name.toLowerCase() === r.from.toLowerCase());
+      if (idx >= 0) next[idx] = { ...next[idx], name: r.to, language: detectLanguageFromName(r.to), updatedAt: now };
+    }
+    const gone = new Set((moves?.deletes || []).map((d) => d.toLowerCase()));
+    if (gone.size) {
+      // The agent runs long after this handler was handed over: read tabs / active file fresh, not from the closure
+      const remaining = next.filter((f) => !gone.has(f.name.toLowerCase()));
+      next = remaining;
+      setOpenTabIds((tabs) => tabs.filter((id) => remaining.some((f) => f.id === id)));
+      setActiveFileId((active) => (remaining.some((f) => f.id === active) ? active : fallbackActive(remaining, [])));
+    }
     changes.forEach((ch, i) => {
       const idx = next.findIndex((f) => f.name.toLowerCase() === ch.name.toLowerCase());
       if (idx >= 0) {

@@ -89,6 +89,10 @@ interface AgentStepResponse {
     done: boolean;
     planStep?: number | null;
     install?: { python: string[]; node: string[] } | null;
+    delete?: string[];
+    rename?: { from: string; to: string }[];
+    readExternal?: string[];
+    writeExternal?: { path: string; content: string }[];
   };
   notice: string | null;
   model: string;
@@ -168,9 +172,91 @@ async function installPackages(
 
 /** What the agent wants to do and needs the user's approval for. */
 export type AgentApprovalRequest =
-  | { kind: 'files'; changes: { path: string; oldContent: string | null; newContent: string }[] }
+  | {
+      kind: 'files';
+      changes: { path: string; oldContent: string | null; newContent: string }[];
+      deletes?: string[];
+      renames?: { from: string; to: string }[];
+    }
   | { kind: 'run'; path: string; risks?: Risk[] }
-  | { kind: 'install'; python: string[]; node: string[] };
+  | { kind: 'install'; python: string[]; node: string[] }
+  /** Outside the project: always asked, even after "allow all" or with approvals turned off */
+  | { kind: 'external-read'; paths: string[] }
+  | { kind: 'external-write'; changes: { path: string; oldContent: string | null; newContent: string }[] };
+
+/** Result of reading a path outside the project (see api/agentfs.ts). */
+export type ExternalRead =
+  | { path: string; kind: 'file'; content: string; truncated: boolean; size: number }
+  | { path: string; kind: 'binary'; size: number }
+  | { path: string; kind: 'dir'; entries: { name: string; dir: boolean; size: number }[]; truncated: boolean }
+  | { path: string; kind: 'missing' }
+  | { path: string; kind: 'error'; error: string };
+
+export type ExternalWrite = { path: string; ok: true; created: boolean; backup: string | null } | { path: string; ok: false; error: string };
+
+async function postJson<T>(url: string, body: unknown, signal: AbortSignal): Promise<T> {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+  return data;
+}
+
+const readExternal = (paths: string[], signal: AbortSignal) =>
+  postJson<{ results: ExternalRead[] }>('/api/agent/fs/read', { paths }, signal).then((d) => d.results);
+const writeExternal = (files: { path: string; content: string }[], signal: AbortSignal) =>
+  postJson<{ results: ExternalWrite[] }>('/api/agent/fs/write', { files }, signal).then((d) => d.results);
+
+/** What the agent read outside the project, as text for the model. */
+function describeExternalReads(results: ExternalRead[]): string {
+  return results
+    .map((r) => {
+      if (r.kind === 'file') return `=== ${r.path} (${r.size} bytes${r.truncated ? ', truncated' : ''}) ===\n${r.content}`;
+      if (r.kind === 'dir') {
+        const list = r.entries.map((e) => (e.dir ? `${e.name}/` : `${e.name} (${e.size} bytes)`)).join('\n') || '(empty)';
+        return `=== ${r.path} (folder) ===\n${list}${r.truncated ? '\n... more entries' : ''}`;
+      }
+      if (r.kind === 'binary') return `=== ${r.path} === binary file, ${r.size} bytes (not shown)`;
+      if (r.kind === 'missing') return `=== ${r.path} === does not exist`;
+      return `=== ${r.path} === cannot be read: ${r.error}`;
+    })
+    .join('\n\n');
+}
+
+/** Renames and deletes that fit the project; the rest is reported back to the model. */
+function checkMoves(files: AgentFile[], deletes: string[], renames: { from: string; to: string }[]) {
+  const names = new Set(files.map((f) => f.name.toLowerCase()));
+  const problems: string[] = [];
+  const okRenames: { from: string; to: string }[] = [];
+  for (const r of renames) {
+    if (!names.has(r.from.toLowerCase())) problems.push(`Cannot rename "${r.from}": no such file.`);
+    else if (names.has(r.to.toLowerCase()) && r.to.toLowerCase() !== r.from.toLowerCase()) problems.push(`Cannot rename "${r.from}" to "${r.to}": that file already exists.`);
+    else {
+      names.delete(r.from.toLowerCase());
+      names.add(r.to.toLowerCase());
+      okRenames.push(r);
+    }
+  }
+  const okDeletes: string[] = [];
+  for (const d of deletes) {
+    if (!names.has(d.toLowerCase())) problems.push(`Cannot delete "${d}": no such file.`);
+    else {
+      names.delete(d.toLowerCase());
+      okDeletes.push(d);
+    }
+  }
+  return { deletes: okDeletes, renames: okRenames, problems };
+}
+
+/** Apply renames, then deletes to the agent's copy of the project. */
+function applyMoves(files: AgentFile[], deletes: string[], renames: { from: string; to: string }[]): AgentFile[] {
+  let out = files.map((f) => {
+    const r = renames.find((x) => x.from.toLowerCase() === f.name.toLowerCase());
+    return r ? { ...f, name: r.to } : f;
+  });
+  const gone = new Set(deletes.map((d) => d.toLowerCase()));
+  out = out.filter((f) => !gone.has(f.name.toLowerCase()));
+  return out;
+}
 
 /** 'yes' = this action, 'all' = this and every following action of the current task, 'no' = stop. */
 export type AgentApproval = 'yes' | 'all' | 'no';
@@ -248,12 +334,24 @@ export function formatPlan(plan: AgentPlan, current: number | null, finished = f
 }
 
 export type AgentEvent =
-  | { kind: 'step'; text: string; changed: string[]; model: string; planStep: number | null }
+  | {
+      kind: 'step';
+      text: string;
+      changed: string[];
+      deleted: string[];
+      renamed: { from: string; to: string }[];
+      model: string;
+      planStep: number | null;
+    }
+  | { kind: 'external-read'; results: ExternalRead[] }
+  | { kind: 'external-write'; results: ExternalWrite[] }
   | { kind: 'run'; path: string; report: RunReport }
   | { kind: 'install'; python: string[]; node: string[]; ok: boolean; output: string }
   | { kind: 'finished'; reason: 'done' | 'stopped' | 'rejected' | 'max-steps' | 'error'; steps: number; error?: string };
 
 export const AGENT_MAX_STEPS = 8;
+/** Step limits the user can pick; 0 = no limit (the agent works until done or Stop) */
+export const AGENT_STEP_CHOICES = [8, 20, 50, 0] as const;
 
 /**
  * Agent loop: ask the model for the next step, apply its file changes, run what it asks to run,
@@ -265,10 +363,15 @@ export async function runAgent(opts: {
   model: string;
   projectId?: string | null;
   signal: AbortSignal;
-  applyFiles: (changes: AgentFile[]) => void;
+  /** Write files into the project; `moves` renames, then deletes project files first */
+  applyFiles: (changes: AgentFile[], moves?: { deletes: string[]; renames: { from: string; to: string }[] }) => void;
   onEvent: (e: AgentEvent) => void;
   /** Ask the user before changing files / running code. Omitted = everything is allowed. */
   confirm?: (req: AgentApprovalRequest) => Promise<AgentApproval>;
+  /** Ask about files outside the project: always, whatever `confirm` and "allow all" say. Omitted = refused. */
+  confirmExternal?: (req: AgentApprovalRequest) => Promise<AgentApproval>;
+  /** Steps before the agent stops; 0 or null = no limit. Default AGENT_MAX_STEPS. */
+  maxSteps?: number | null;
   /** A plan the user approved: the agent follows it and reports which step it works on */
   plan?: AgentPlan;
 }): Promise<void> {
@@ -279,7 +382,8 @@ export async function runAgent(opts: {
     if (answer === 'all') approveAll = true;
     return answer !== 'no';
   };
-  const files = opts.files.map((f) => ({ ...f }));
+  let files = opts.files.map((f) => ({ ...f }));
+  const maxSteps = opts.maxSteps === undefined ? AGENT_MAX_STEPS : opts.maxSteps || Infinity;
   const convo: { role: 'user' | 'model'; text: string }[] = [
     {
       role: 'user',
@@ -296,7 +400,7 @@ export async function runAgent(opts: {
   let steps = 0;
 
   try {
-    while (steps < AGENT_MAX_STEPS) {
+    while (steps < maxSteps) {
       if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
       steps++;
 
@@ -314,26 +418,69 @@ export async function runAgent(opts: {
         kind: 'step',
         text: (data.notice || '') + step.message,
         changed: step.files.map((f) => f.path),
+        deleted: step.delete || [],
+        renamed: step.rename || [],
         model: data.model,
         planStep: step.planStep ?? null,
       });
 
-      // File changes: shown to the user first (unless everything is allowed), then applied
-      if (step.files.length > 0) {
+      // File changes, renames and deletes: shown to the user first (unless everything is allowed), then applied
+      const moves = checkMoves(files, step.delete || [], step.rename || []);
+      if (step.files.length > 0 || moves.deletes.length > 0 || moves.renames.length > 0) {
+        const moved = applyMoves(files, moves.deletes, moves.renames);
         const changes = step.files.map((ch) => ({
           path: ch.path,
-          oldContent: files.find((f) => f.name === ch.path)?.content ?? null,
+          oldContent: moved.find((f) => f.name.toLowerCase() === ch.path.toLowerCase())?.content ?? null,
           newContent: ch.content,
         }));
-        if (!(await ask({ kind: 'files', changes }))) return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
+        if (!(await ask({ kind: 'files', changes, deletes: moves.deletes, renames: moves.renames }))) {
+          return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
+        }
+        files = moved;
         for (const ch of step.files) {
-          const existing = files.find((f) => f.name === ch.path);
+          const existing = files.find((f) => f.name.toLowerCase() === ch.path.toLowerCase());
           if (existing) existing.content = ch.content;
           else files.push({ name: ch.path, content: ch.content });
         }
-        opts.applyFiles(step.files.map((f) => ({ name: f.path, content: f.content })));
+        opts.applyFiles(
+          step.files.map((f) => ({ name: f.path, content: f.content })),
+          { deletes: moves.deletes, renames: moves.renames }
+        );
       }
       convo.push({ role: 'model', text: JSON.stringify(step) });
+      if (moves.problems.length) convo.push({ role: 'user', text: moves.problems.join('\n') });
+
+      // Outside the project: always asked, even after "allow all"
+      const askExternal = async (req: AgentApprovalRequest) => !!opts.confirmExternal && (await opts.confirmExternal(req)) !== 'no';
+      if (step.readExternal?.length) {
+        if (!(await askExternal({ kind: 'external-read', paths: step.readExternal }))) {
+          return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
+        }
+        if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
+        const results = await readExternal(step.readExternal, opts.signal);
+        opts.onEvent({ kind: 'external-read', results });
+        convo.push({ role: 'user', text: `Files outside the project you asked for:\n\n${clip(describeExternalReads(results), 60_000)}` });
+      }
+      if (step.writeExternal?.length) {
+        // The current content, so the user sees exactly what changes
+        const before = await readExternal(step.writeExternal.map((f) => f.path), opts.signal);
+        const changes = step.writeExternal.map((f, i) => {
+          const b = before[i];
+          return { path: b && b.kind !== 'error' ? b.path : f.path, oldContent: b?.kind === 'file' && !b.truncated ? b.content : null, newContent: f.content };
+        });
+        if (!(await askExternal({ kind: 'external-write', changes }))) {
+          return opts.onEvent({ kind: 'finished', reason: 'rejected', steps });
+        }
+        if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
+        const results = await writeExternal(step.writeExternal, opts.signal);
+        opts.onEvent({ kind: 'external-write', results });
+        convo.push({
+          role: 'user',
+          text:
+            'Files outside the project:\n' +
+            results.map((r) => (r.ok ? `${r.path}: ${r.created ? 'created' : 'overwritten'}` : `${r.path}: NOT written — ${r.error}`)).join('\n'),
+        });
+      }
 
       // Package installs: the user approves, then pip/npm run into the project's own packages folder
       if (step.install && (step.install.python.length || step.install.node.length)) {
@@ -395,6 +542,32 @@ export function formatInstall(e: { python: string[]; node: string[]; ok: boolean
   const names = [...e.python, ...e.node].map((p) => `\`${p}\``).join(', ');
   const status = e.ok ? t('agent.installOk') : t('agent.installFail');
   return `📦 **${t('agent.installTitle')}:** ${names} — ${status}\n\n\`\`\`text\n${clip(e.output, 2000)}\n\`\`\``;
+}
+
+/** Markdown for what the agent read or wrote outside the project. */
+export function formatExternal(e: { kind: 'external-read'; results: ExternalRead[] } | { kind: 'external-write'; results: ExternalWrite[] }): string {
+  if (e.kind === 'external-read') {
+    const lines = e.results.map((r) => {
+      const what =
+        r.kind === 'file'
+          ? t('agent.extFile', { size: r.size })
+          : r.kind === 'dir'
+            ? t('agent.extDir', { count: r.entries.length })
+            : r.kind === 'binary'
+              ? t('agent.extBinary')
+              : r.kind === 'missing'
+                ? t('agent.extMissing')
+                : `✗ ${r.error}`;
+      return `- \`${r.path}\` — ${what}`;
+    });
+    return `📂 **${t('agent.extReadTitle')}:**\n${lines.join('\n')}`;
+  }
+  const lines = e.results.map((r) =>
+    r.ok
+      ? `- \`${r.path}\` — ${r.created ? t('agent.extCreated') : t('agent.extOverwritten')}${r.backup ? `\n  ${t('agent.extBackup')}: \`${r.backup}\`` : ''}`
+      : `- \`${r.path}\` — ✗ ${r.error}`
+  );
+  return `💾 **${t('agent.extWriteTitle')}:**\n${lines.join('\n')}`;
 }
 
 /** Markdown for a run report shown in the chat. */
