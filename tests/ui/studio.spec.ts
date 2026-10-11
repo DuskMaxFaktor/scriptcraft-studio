@@ -1648,10 +1648,16 @@ test('publish to GitHub from the Git panel (fake GitHub CLI)', async ({ page, re
   const project = await openStudio(page, request, 'Публикация', [{ name: 'main.py', content: 'print("hello")', isEntry: true }]);
   await page.keyboard.press('Control+Shift+G');
   await page.getByRole('button', { name: 'Создать репозиторий' }).click();
-  await request.post(`/api/git/${project.id}/identity`, { data: { name: 'UI Test', email: 'ui@example.com' } });
+  // Wait for init to finish — setting author before .git exists fails on a slow CI runner
+  await expect(page.locator('[data-git-file="main.py"]')).toBeVisible();
+  const idRes = await request.post(`/api/git/${project.id}/identity`, { data: { name: 'UI Test', email: 'ui@example.com' } });
+  expect(idRes.ok()).toBeTruthy();
+  await page.locator('[data-git-refresh]').click();
+  await expect(page.locator('[data-github-open]')).toBeVisible();
   await page.locator('[data-github-open]').click();
   await expect(page.locator('[data-github-name]')).toHaveValue(project.id);
   await page.locator('[data-github-submit]').click();
+  await expect(page.locator('[data-github-publish] .text-rose-300')).toHaveCount(0);
   await expect(page.locator('[data-github-link]')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-github-link]')).toHaveAttribute('href', new RegExp(`/${project.id}$`));
   await expect(page.getByText('Нет изменений с последнего коммита')).toBeVisible();
