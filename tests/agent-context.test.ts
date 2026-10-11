@@ -5,6 +5,8 @@ import {
   compactAgentConvo,
   formatRunFailureHint,
   pickEntryToRun,
+  repeatedRunFailureMessage,
+  runFailureSignature,
   stallContinueMessage,
   summarizeAgentStepJson,
 } from '../src/utils/agentContext.ts';
@@ -71,8 +73,31 @@ test('stallContinueMessage: demands run when entry exists', () => {
   assert.match(msg, /Do not keep saying/);
 });
 
+test('stallContinueMessage: after a successful run, asks for done', () => {
+  const msg = stallContinueMessage({
+    files: [{ name: 'main.py', content: 'print(1)' }],
+    idleSteps: 1,
+    wroteFilesThisStep: false,
+    hadSuccessfulRun: true,
+  });
+  assert.match(msg, /done=true/);
+  assert.match(msg, /already ran successfully/);
+});
+
 test('formatRunFailureHint: IndentationError and unterminated string', () => {
   const h = formatRunFailureHint('IndentationError: unexpected indent\nSyntaxError: unterminated string literal');
   assert.match(h, /IndentationError/);
   assert.match(h, /ONE line/);
+});
+
+test('formatRunFailureHint: ModuleNotFoundError', () => {
+  assert.match(formatRunFailureHint("ModuleNotFoundError: No module named 'flask'"), /install\.python/);
+});
+
+test('runFailureSignature + repeatedRunFailureMessage', () => {
+  const sig = runFailureSignature('Traceback (most recent call last):\n  File "main.py"\nSyntaxError: unexpected indent');
+  assert.match(sig, /SyntaxError/);
+  const nudge = repeatedRunFailureMessage('main.py', 3, sig);
+  assert.match(nudge, /3 times/);
+  assert.match(nudge, /Rewrite the WHOLE file/);
 });

@@ -97,6 +97,12 @@ export function stallContinueMessage(opts: {
       `If something is still missing, write at most one file, then run.`
     );
   }
+  if (opts.hadSuccessfulRun && opts.idleSteps >= 1) {
+    return (
+      'The program already ran successfully. Set done=true and run=null now. ' +
+      'Do not rewrite working files unless the user asked for a change.'
+    );
+  }
   if (opts.idleSteps >= 2) {
     return (
       'You made no progress (no file changes and no run). ' +
@@ -104,6 +110,26 @@ export function stallContinueMessage(opts: {
     );
   }
   return 'Continue with the next step. Prefer setting "run" once an entry file exists.';
+}
+
+/** Stable short fingerprint of a failed run (for detecting repeated identical failures). */
+export function runFailureSignature(output: string): string {
+  const lines = (output || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const line =
+    lines.find((l) => /\w*(Error|Exception)\b|FAILED/i.test(l)) ||
+    lines.find((l) => /Traceback/i.test(l)) ||
+    (output || '').trim().slice(0, 120);
+  return line.replace(/\s+/g, ' ').slice(0, 160);
+}
+
+/** Nudge when the same entry fails the same way twice+ (local models often tweak one line forever). */
+export function repeatedRunFailureMessage(path: string, count: number, signature: string): string {
+  return (
+    `You failed running "${path}" ${count} times with the same error` +
+    (signature ? ` (${signature})` : '') +
+    `. Stop tiny edits. Rewrite the WHOLE file in "files" (correct syntax, complete program), then set run="${path}" once. ` +
+    `Do not set done=true until exit code 0.`
+  );
 }
 
 /** Extra notes for common run failures (helps small local models). */
@@ -118,6 +144,15 @@ export function formatRunFailureHint(output: string): string {
   }
   if (/SyntaxError/i.test(o) && /f['"]/.test(o)) {
     tips.push('f-string quotes: use f"... {obj[\'key\']} ..." (double quotes outside, single inside).');
+  }
+  if (/ModuleNotFoundError|No module named/i.test(o)) {
+    tips.push('Missing package: set install.python or install.node with the package name, then run again — or use only the standard library.');
+  }
+  if (/NameError:\s*name ['"]/i.test(o)) {
+    tips.push('NameError: define the name before use, or fix a typo; rewrite the whole file if the structure is broken.');
+  }
+  if (/FileNotFoundError|ENOENT/i.test(o)) {
+    tips.push('File not found: create the missing project file in "files", or fix the path to a file that exists in the project.');
   }
   if (!tips.length) return '';
   return '\n\nFix tips:\n- ' + tips.join('\n- ');
