@@ -291,6 +291,25 @@ namespace ScriptCraftSetup {
             }
         }
 
+        static void TryDeleteFile(string path) {
+            for (int i = 0; i < 20; i++) {
+                try {
+                    if (!File.Exists(path)) return;
+                    File.SetAttributes(path, FileAttributes.Normal);
+                    File.Delete(path);
+                    return;
+                } catch (IOException) { Thread.Sleep(250); }
+                catch (UnauthorizedAccessException) { Thread.Sleep(250); }
+            }
+            // Last resort: delete after this process releases any remaining handles
+            try {
+                var del = new ProcessStartInfo("cmd.exe", "/c ping 127.0.0.1 -n 2 >nul & del /f /q \"" + path + "\"");
+                del.CreateNoWindow = true;
+                del.UseShellExecute = false;
+                Process.Start(del);
+            } catch { }
+        }
+
         static void DeleteDir(string dir) {
             for (int i = 0; i < 5; i++) {
                 try {
@@ -317,11 +336,15 @@ namespace ScriptCraftSetup {
                 if (!silent) MessageBox.Show("ScriptCraft Studio не найдена.", AppName, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return 1;
             }
-            // Uninstall.exe cannot delete itself while it runs: continue from a copy in TEMP
+            // Uninstall.exe cannot delete itself while it runs: continue from a copy in TEMP.
+            // Detect the temp copy by filename — do NOT rely on StartsWith(installDir): Windows
+            // runners often mix 8.3 (RUNNER~1) and long (runneradmin) forms of the same path.
             string self = Assembly.GetExecutingAssembly().Location;
-            if (self.StartsWith(installDir.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase)) {
+            bool alreadyTempCopy = Path.GetFileName(self).StartsWith("ScriptCraftUninstall-", StringComparison.OrdinalIgnoreCase);
+            bool isInstalledUninstaller = Path.GetFileName(self).Equals("Uninstall.exe", StringComparison.OrdinalIgnoreCase);
+            if (!alreadyTempCopy && isInstalledUninstaller) {
                 string copy = Path.Combine(Path.GetTempPath(), "ScriptCraftUninstall-" + Guid.NewGuid().ToString("N") + ".exe");
-                File.Copy(self, copy);
+                File.Copy(self, copy, true);
                 var args = new StringBuilder("/uninstall /D=\"" + installDir + "\" /parent=" + Process.GetCurrentProcess().Id);
                 if (silent) args.Append(" /S");
                 if (deleteData) args.Append(" /deletedata");
@@ -335,7 +358,13 @@ namespace ScriptCraftSetup {
                 return 0;
             }
             if (parentPid > 0) {
-                try { Process.GetProcessById(parentPid).WaitForExit(15000); } catch { }
+                try {
+                    using (var parent = Process.GetProcessById(parentPid)) {
+                        parent.WaitForExit(30000);
+                    }
+                } catch { }
+                // Give Windows time to release the image lock on Uninstall.exe
+                Thread.Sleep(750);
             }
             if (!silent) {
                 var r = MessageBox.Show("Удалить ScriptCraft Studio?", AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
@@ -348,14 +377,14 @@ namespace ScriptCraftSetup {
             Log("uninstall " + installDir + (deleteData ? " (with data)" : ""));
             StopStudio(installDir);
             foreach (string lnk in new[] { Path.Combine(StartMenuDir(), AppName + ".lnk"), Path.Combine(DesktopDir(), AppName + ".lnk") }) {
-                try { if (File.Exists(lnk)) File.Delete(lnk); } catch { }
+                TryDeleteFile(lnk);
             }
             try { Registry.CurrentUser.DeleteSubKeyTree(regKey, false); } catch { }
             if (deleteData) DeleteDir(installDir);
             else {
                 foreach (var entry in Directory.GetFileSystemEntries(installDir)) {
                     if (Array.IndexOf(UserData, Path.GetFileName(entry)) >= 0) continue;
-                    if (Directory.Exists(entry)) DeleteDir(entry); else { File.SetAttributes(entry, FileAttributes.Normal); File.Delete(entry); }
+                    if (Directory.Exists(entry)) DeleteDir(entry); else TryDeleteFile(entry);
                 }
             }
             if (!silent) MessageBox.Show(deleteData ? "ScriptCraft Studio удалена." : "ScriptCraft Studio удалена. Ваши проекты остались в папке:\n" + installDir, AppName);
