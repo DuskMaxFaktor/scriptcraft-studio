@@ -192,6 +192,7 @@ const en = {
   'ai.subtitle': 'Gemini key, local models (Ollama) and your own OpenAI-compatible server',
   'ai.connected': 'connected',
   'ai.unreachable': 'not reachable',
+  'ai.ollamaUnreachableTip': 'Start the Ollama app (or run `ollama serve`), then click Refresh. Default address is http://127.0.0.1:11434.',
   'ai.off': 'off',
   'ai.keySet': 'key set ({key})',
   'ai.noKey': 'no key',
@@ -981,7 +982,9 @@ const en = {
   'gh.confirmPublic': 'The repository "{name}" will be PUBLIC: anyone on the internet can see the code. Continue?',
   'gh.published': 'Published: {url}',
   'gh.publishedNoUrl': 'Published to GitHub',
+  'gh.publishFailed': 'Could not publish: {error}',
   'gh.openRepo': 'Open on GitHub',
+
 };
 
 type Key = keyof typeof en;
@@ -1169,6 +1172,7 @@ const ru: Record<Key, string> = {
   'ai.subtitle': 'Ключ Gemini, локальные модели (Ollama) и свой OpenAI-совместимый сервер',
   'ai.connected': 'подключено',
   'ai.unreachable': 'не отвечает',
+  'ai.ollamaUnreachableTip': 'Запустите приложение Ollama (или `ollama serve`), затем нажмите «Обновить». Адрес по умолчанию: http://127.0.0.1:11434.',
   'ai.off': 'выключено',
   'ai.keySet': 'ключ задан ({key})',
   'ai.noKey': 'ключа нет',
@@ -1954,6 +1958,7 @@ const ru: Record<Key, string> = {
   'gh.confirmPublic': 'Репозиторий «{name}» будет ПУБЛИЧНЫМ: код увидят все в интернете. Продолжить?',
   'gh.published': 'Опубликовано: {url}',
   'gh.publishedNoUrl': 'Опубликовано на GitHub',
+  'gh.publishFailed': 'Не удалось опубликовать: {error}',
   'gh.openRepo': 'Открыть на GitHub',
 };
 

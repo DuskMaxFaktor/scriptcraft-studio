@@ -10,6 +10,8 @@ import {
   pickEntryToRun,
   PROJECT_RESYNC_EVERY,
   stallContinueMessage,
+  runFailureSignature,
+  repeatedRunFailureMessage,
   type AgentConvoMessage,
   type AgentFile,
 } from './agentContext.ts';
@@ -21,6 +23,8 @@ export {
   formatRunFailureHint,
   pickEntryToRun,
   stallContinueMessage,
+  runFailureSignature,
+  repeatedRunFailureMessage,
   summarizeAgentStepJson,
 } from './agentContext.ts';
 
@@ -397,6 +401,8 @@ export async function runAgent(opts: {
   /** Steps in a row with no file/run/install/external progress (local models love this). */
   let idleSteps = 0;
   let hadSuccessfulRun = false;
+  /** Same entry + same error fingerprint → force a full-file rewrite nudge. */
+  let lastFail: { path: string; signature: string; count: number } | null = null;
 
   try {
     while (steps < maxSteps) {
@@ -572,19 +578,27 @@ export async function runAgent(opts: {
       if (opts.signal.aborted) return opts.onEvent({ kind: 'finished', reason: 'stopped', steps });
       const report = await runProjectFile(step.run, files, opts.signal, opts.projectId);
       opts.onEvent({ kind: 'run', path: step.run, report });
-      if (report.ok) hadSuccessfulRun = true;
+      if (report.ok) {
+        hadSuccessfulRun = true;
+        lastFail = null;
+      } else {
+        const signature = runFailureSignature(report.output);
+        if (lastFail && lastFail.path === step.run && lastFail.signature === signature) lastFail.count += 1;
+        else lastFail = { path: step.run, signature, count: 1 };
+      }
       idleSteps = 0;
 
       // Finished and verified by a successful run: no need to spend another request
       if (step.done && report.ok) return opts.onEvent({ kind: 'finished', reason: 'done', steps });
-      convo.push({
-        role: 'user',
-        text:
-          `Result of running ${step.run}: exit code ${report.exitCode ?? 'n/a'}${report.ok ? ' (success)' : ' (FAILED)'}\n${report.output}` +
-          (report.ok
-            ? '\n\nIf the output shows the task is complete, answer with done=true and run=null. Otherwise continue.'
-            : `\n\nFix the problem and run again.${formatRunFailureHint(report.output)}`),
-      });
+      let feedback =
+        `Result of running ${step.run}: exit code ${report.exitCode ?? 'n/a'}${report.ok ? ' (success)' : ' (FAILED)'}\n${report.output}` +
+        (report.ok
+          ? '\n\nIf the output shows the task is complete, answer with done=true and run=null. Otherwise continue.'
+          : `\n\nFix the problem and run again.${formatRunFailureHint(report.output)}`);
+      if (!report.ok && lastFail && lastFail.count >= 2) {
+        feedback += '\n\n' + repeatedRunFailureMessage(lastFail.path, lastFail.count, lastFail.signature);
+      }
+      convo.push({ role: 'user', text: feedback });
     }
     opts.onEvent({ kind: 'finished', reason: 'max-steps', steps });
   } catch (err: any) {

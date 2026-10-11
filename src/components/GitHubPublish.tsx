@@ -68,11 +68,11 @@ export const GitHubPublish: React.FC<Props> = ({ projectId, defaultName, onBefor
         body: JSON.stringify({ name: name.trim(), visibility, description }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || res.statusText);
       setOpen(false);
       onPublished(data.url);
     } catch (e: any) {
-      setError(e.message);
+      setError(t('gh.publishFailed', { error: e.message || String(e) }));
     } finally {
       setBusy(false);
     }

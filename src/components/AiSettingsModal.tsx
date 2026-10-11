@@ -145,6 +145,11 @@ export const AiSettingsModal: React.FC<{ isOpen: boolean; onClose: () => void }>
                 </label>
                 {statusBadge(status.ollama)}
               </div>
+              {s.ollama.enabled && status.ollama === 'unreachable' && (
+                <p className="text-[11px] text-rose-300/90 leading-snug" data-ollama-unreachable-tip>
+                  {t('ai.ollamaUnreachableTip')}
+                </p>
+              )}
               <input
                 value={s.ollama.baseUrl}
                 onChange={(e) => setS({ ...s, ollama: { ...s.ollama, baseUrl: e.target.value } })}
