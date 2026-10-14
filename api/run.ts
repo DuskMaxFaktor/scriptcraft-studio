@@ -94,6 +94,19 @@ function safeRelative(name: string): string | null {
 }
 
 /** The project folder, when everything sent for the run is exactly what is saved there. */
+/**
+ * The full form of a folder path. Windows may name TEMP (or the studio folder) by its 8.3 short name
+ * ("C:\Users\8E54~1\..." for a long or non-Latin user name), while Node, Python and the debuggers
+ * report the long one; paths compared between them (breakpoints!) must use the same form.
+ */
+function longPath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
+
 function savedProjectDir(projectId: string | undefined, code: string, files: ProjectFileInput[], entryRel: string): string | null {
   if (!projectId || !/^[a-zA-Z0-9_-]{1,80}$/.test(projectId)) return null;
   const dir = path.join(process.cwd(), 'projects', projectId);
@@ -122,17 +135,19 @@ function savedProjectDir(projectId: string | undefined, code: string, files: Pro
 export function prepareRun(language: string, code: string, files?: ProjectFileInput[], entry?: string, projectId?: string): PreparedRun | null {
   const fileId = `script_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const lang = language.toLowerCase();
-  let cwd = os.tmpdir();
+  const tmp = longPath(os.tmpdir());
+  let cwd = tmp;
   let tempDir: string | undefined;
   let rootDir: string | undefined;
   const entryRel = entry ? safeRelative(entry) : null;
-  const projectDir = Array.isArray(files) && entryRel ? savedProjectDir(projectId, code, files, entryRel) : null;
+  const saved = Array.isArray(files) && entryRel ? savedProjectDir(projectId, code, files, entryRel) : null;
+  const projectDir = saved && longPath(saved);
 
   if (projectDir && entryRel) {
     rootDir = projectDir;
     cwd = path.dirname(path.join(projectDir, entryRel));
   } else if (Array.isArray(files) && files.length > 0 && entryRel) {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scriptcraft-run-'));
+    tempDir = fs.mkdtempSync(path.join(tmp, 'scriptcraft-run-'));
     let total = 0;
     for (const f of files) {
       const rel = safeRelative(f?.name);
@@ -155,7 +170,7 @@ export function prepareRun(language: string, code: string, files?: ProjectFileIn
     // In place: the saved file itself (never rewritten)
     if (projectDir && entryRel) return path.join(projectDir, entryRel);
     // Multi-file run: the entry file is written with the current editor content under its real name
-    const filePath = tempDir && entryRel ? path.join(tempDir, entryRel) : path.join(os.tmpdir(), `${fileId}.${ext}`);
+    const filePath = tempDir && entryRel ? path.join(tempDir, entryRel) : path.join(tmp, `${fileId}.${ext}`);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, code, 'utf-8');
     return filePath;
